@@ -54,10 +54,21 @@ impl ExitStatus {
     }
 }
 
-/// Formats as `exit code: <code>`, matching `std::process::ExitStatus`.
+/// Formats as `exit code: <code>`, matching `std::process::ExitStatus` on
+/// Windows: decimal for ordinary codes, hexadecimal when the high bit is set.
+///
+/// The hexadecimal case matters more here than it would elsewhere, because
+/// the code this crate documents most — `STATUS_CONTROL_C_EXIT`, reported by
+/// a child whose terminal went away — is in that range: it renders as
+/// `exit code: 0xc000013a`, the spelling `NTSTATUS` values are written in
+/// everywhere, rather than the unrecognizable `3221225786`.
 impl fmt::Display for ExitStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "exit code: {}", self.0)
+        if self.0 & 0x8000_0000 != 0 {
+            write!(f, "exit code: {:#x}", self.0)
+        } else {
+            write!(f, "exit code: {}", self.0)
+        }
     }
 }
 
@@ -80,8 +91,23 @@ mod tests {
         assert_eq!(ExitStatus::from_raw(259).code(), 259);
     }
 
+    /// The expectations are exactly what
+    /// `std::os::windows::process::ExitStatusExt::from_raw` followed by
+    /// `to_string` produces for each value, so the two types render every
+    /// status identically.
     #[test]
     fn display_matches_std_wording() {
         assert_eq!(ExitStatus::from_raw(3).to_string(), "exit code: 3");
+        assert_eq!(ExitStatus::from_raw(259).to_string(), "exit code: 259");
+        // NTSTATUS-range codes (high bit set) render in hex, as std does:
+        // STATUS_CONTROL_C_EXIT, the code this crate documents most.
+        assert_eq!(
+            ExitStatus::from_raw(0xC000_013A).to_string(),
+            "exit code: 0xc000013a"
+        );
+        assert_eq!(
+            ExitStatus::from_raw(u32::MAX).to_string(),
+            "exit code: 0xffffffff"
+        );
     }
 }
