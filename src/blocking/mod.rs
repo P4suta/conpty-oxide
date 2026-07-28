@@ -91,29 +91,18 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle, RawHandle};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use crate::backend::{BackendKind, ConPtyBackend};
 use crate::core::is_disconnect_error;
 use crate::core::job::Job;
 use crate::core::pipes::{create_sync_pipes, SyncPipes};
-use crate::core::proc::{self, SpawnedChild};
 use crate::core::pseudocon::{ConsoleShared, PseudoConsole};
-use crate::core::wait::{spawn_legacy_watcher, ProcessWaiter, LEGACY_CLOSE_GRACE};
+use crate::core::session::{self, Session, KILL_EXIT_CODE};
+use crate::core::wait::ProcessWaiter;
 use crate::error::{Error, Result};
 use crate::size::Size;
 use crate::status::ExitStatus;
-
-/// Exit code reported for a process tree terminated by [`Child::kill`].
-///
-/// Matches `std::process::Child::kill`, which passes `1` to
-/// `TerminateProcess`.
-const KILL_EXIT_CODE: u32 = 1;
-
-/// Capability name reported by [`Error::UnsupportedFeature`] when the backend
-/// cannot clear the pseudoconsole.
-const CLEAR_FEATURE: &str = "ClearPseudoConsole";
 
 /// Builder for a [`Pty`].
 ///
@@ -249,63 +238,13 @@ impl PtyBuilder {
         Ok(Pty {
             reader: ConoutReader::new(conout_read, shared),
             writer: ConinWriter::new(conin_write),
-            inner: Arc::new(PtyInner {
+            inner: Arc::new(Session::new(
                 console,
                 backend,
-                size: Mutex::new(self.size),
-                eof_on_root_exit: self.eof_on_root_exit,
-                spawned: AtomicBool::new(false),
-            }),
+                self.size,
+                self.eof_on_root_exit,
+            )),
         })
-    }
-}
-
-/// The shared, controller-side state of one session.
-///
-/// Held by the [`Pty`] and, after [`Pty::into_split`], by the
-/// [`PtyController`]. It does not include the pipe ends: those are owned by
-/// the read and write halves so they can be moved to other threads
-/// independently.
-#[derive(Debug)]
-struct PtyInner {
-    console: PseudoConsole,
-    backend: ConPtyBackend,
-    /// Last size that `ResizePseudoConsole` accepted.
-    size: Mutex<Size>,
-    eof_on_root_exit: bool,
-    /// Whether a root child has been spawned into this pseudoconsole.
-    ///
-    /// One session hosts exactly one root child. Re-using a `Pty` would be
-    /// unsound rather than merely surprising: on a legacy backend the watcher
-    /// closes the pseudoconsole after the first child exits, and a second
-    /// `CreateProcessW` would then hand a freed `HPCON` to the kernel.
-    spawned: AtomicBool,
-}
-
-impl PtyInner {
-    fn size(&self) -> Size {
-        *self.size.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn resize(&self, size: Size) -> Result<()> {
-        self.console.resize(size).map_err(Error::Resize)?;
-        *self.size.lock().unwrap_or_else(PoisonError::into_inner) = size;
-        Ok(())
-    }
-
-    fn clear(&self) -> Result<()> {
-        // Asked before the call so a missing capability is reported as such
-        // rather than as an opaque I/O failure.
-        if !self.backend.supports_clear() {
-            return Err(Error::UnsupportedFeature {
-                feature: CLEAR_FEATURE,
-            });
-        }
-        self.console.clear().map_err(Error::Clear)
-    }
-
-    fn supports_clear(&self) -> bool {
-        self.backend.supports_clear()
     }
 }
 
@@ -331,7 +270,7 @@ impl PtyInner {
 pub struct Pty {
     reader: ConoutReader,
     writer: ConinWriter,
-    inner: Arc<PtyInner>,
+    inner: Arc<Session>,
 }
 
 impl Pty {
@@ -404,7 +343,7 @@ impl Pty {
     /// Returns which ConPTY implementation backs this session.
     #[must_use]
     pub fn backend_kind(&self) -> &BackendKind {
-        self.inner.backend.kind()
+        self.inner.backend_kind()
     }
 
     /// Borrows the read and write halves separately.
@@ -560,7 +499,7 @@ impl Write for OwnedWriteHalf {
 /// pseudoconsole is closed once every part is gone.
 #[derive(Debug)]
 pub struct PtyController {
-    inner: Arc<PtyInner>,
+    inner: Arc<Session>,
 }
 
 impl PtyController {
@@ -604,7 +543,7 @@ impl PtyController {
     /// Returns which ConPTY implementation backs this session.
     #[must_use]
     pub fn backend_kind(&self) -> &BackendKind {
-        self.inner.backend.kind()
+        self.inner.backend_kind()
     }
 }
 
@@ -852,108 +791,14 @@ impl Command {
     /// that cannot be built, [`io::ErrorKind::AlreadyExists`] for a re-used
     /// `Pty`, or the raw OS error from `CreateProcessW`.
     pub fn spawn(&mut self, pty: &Pty) -> Result<Child> {
-        let session = &*pty.inner;
-        if session.spawned.swap(true, Ordering::SeqCst) {
-            return Err(self.spawn_error(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "this pseudoconsole already hosts a root child process",
-            )));
-        }
-
-        let kill_on_drop = self.inner.get_kill_on_drop();
-        let (job, spawned) = match self.create_child(session, kill_on_drop) {
-            Ok(started) => started,
-            Err(err) => {
-                // Nothing was attached to the pseudoconsole and no watcher
-                // ran, so the session is untouched and can be used for
-                // another attempt.
-                session.spawned.store(false, Ordering::SeqCst);
-                return Err(self.spawn_error(err));
-            }
-        };
-
-        // Step two of the lifecycle, immediately after the child exists:
-        // hand the pseudoconsole its own lifetime back, so that it exits when
-        // the last client disconnects.
-        let released = match session.console.release_after_spawn() {
-            Ok(released) => released,
-            Err(err) => {
-                // The session is demoted to legacy mode; from here on it is
-                // indistinguishable from a backend without the export.
-                log_release_failure(&err);
-                false
-            }
-        };
-
-        // Step three, only for sessions that could not be released: force
-        // end-of-file when the root child exits.
-        if !released && session.eof_on_root_exit {
-            if let Err(err) = arm_legacy_watcher(session, &spawned) {
-                // A legacy session without a watcher could never reach
-                // end-of-file, so this is fatal. Undo the spawn rather than
-                // return a session that can never finish.
-                let _ = job.terminate(KILL_EXIT_CODE);
-                return Err(self.spawn_error(err));
-            }
-        }
-
+        let root = session::spawn_root(&pty.inner, &self.inner)?;
         Ok(Child {
-            waiter: ProcessWaiter::new(spawned.process),
-            job,
-            pid: spawned.pid,
-            kill_on_drop,
+            waiter: root.waiter,
+            job: root.job,
+            pid: root.pid,
+            kill_on_drop: root.kill_on_drop,
             status: None,
         })
-    }
-
-    /// Creates the job object and the process itself.
-    fn create_child(
-        &self,
-        session: &PtyInner,
-        kill_on_drop: bool,
-    ) -> io::Result<(Job, SpawnedChild)> {
-        let job = Job::create(kill_on_drop)?;
-        let spawned = proc::spawn(&self.inner, session.console.hpcon(), &job)?;
-        Ok((job, spawned))
-    }
-
-    fn spawn_error(&self, source: io::Error) -> Error {
-        Error::Spawn {
-            program: self.inner.get_program().to_os_string(),
-            source,
-        }
-    }
-}
-
-/// Starts the watcher that forces end-of-file after the root child exits.
-///
-/// The watcher gets its own duplicate of the process handle so it is
-/// independent of the [`Child`] the caller receives — which may be dropped
-/// long before the child exits.
-fn arm_legacy_watcher(session: &PtyInner, spawned: &SpawnedChild) -> io::Result<()> {
-    let watched = spawned.process.as_handle().try_clone_to_owned()?;
-    spawn_legacy_watcher(
-        watched,
-        Arc::clone(session.console.shared()),
-        LEGACY_CLOSE_GRACE,
-    )
-}
-
-/// Reports a failed `ReleasePseudoConsole`.
-///
-/// Not an error for the caller: the session simply falls back to the legacy
-/// shutdown path, which restores the same end-of-file contract. It is logged
-/// (with the `tracing` feature) because a silent demotion would make the
-/// resulting one-second teardown delay look like a bug.
-fn log_release_failure(err: &io::Error) {
-    #[cfg(feature = "tracing")]
-    tracing::warn!(
-        error = %err,
-        "ReleasePseudoConsole failed; the session falls back to the legacy shutdown path"
-    );
-    #[cfg(not(feature = "tracing"))]
-    {
-        let _ = err;
     }
 }
 
@@ -1081,6 +926,8 @@ impl Drop for Child {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::core::session::CLEAR_FEATURE;
 
     use std::panic;
     use std::sync::mpsc;

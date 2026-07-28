@@ -10,13 +10,10 @@ use core::fmt;
 
 /// The exit status of a child process that has terminated.
 ///
-/// Obtained from [`Child::wait`] or [`Child::try_wait`]. The wrapped value is
-/// exactly what `GetExitCodeProcess` reported, read only after the process
-/// handle was confirmed signaled — so it can never be the `STILL_ACTIVE`
-/// sentinel of a still-running process.
-///
-/// [`Child::wait`]: crate::blocking::Child::wait
-/// [`Child::try_wait`]: crate::blocking::Child::try_wait
+/// Obtained from either front end's `Child::wait` or `Child::try_wait`. The
+/// wrapped value is exactly what `GetExitCodeProcess` reported, read only
+/// after the process handle was confirmed signaled — so it can never be the
+/// `STILL_ACTIVE` sentinel of a still-running process.
 ///
 /// # Examples
 ///
@@ -44,7 +41,7 @@ impl ExitStatus {
     ///
     /// Unlike `std::process::ExitStatus::code` this is not an [`Option`]: a
     /// Windows process always has an exit code, including when it was
-    /// terminated by [`Child::kill`](crate::blocking::Child::kill).
+    /// terminated by `Child::kill`.
     #[must_use]
     pub fn code(&self) -> u32 {
         self.0

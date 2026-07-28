@@ -20,6 +20,10 @@ tracing = ["dep:tracing"]
 name = "blocking_echo"
 required-features = ["blocking"]
 
+[[example]]
+name = "tokio_interactive"
+required-features = ["tokio"]
+
 [target.'cfg(windows)'.dependencies]
 thiserror = "2"
 tokio = { version = "1", optional = true, features = ["net", "rt", "sync"] }
@@ -28,6 +32,15 @@ tracing = { version = "0.1", optional = true }
 [target.'cfg(windows)'.dev-dependencies.windows-sys]
 version = "0.61"
 features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp"]
+
+# Tests, doctests, and the `tokio_interactive` example need more of tokio than
+# the library does — a runtime to start, the `#[tokio::test]` macro, the
+# `AsyncReadExt`/`AsyncWriteExt` extension traits, and timeouts. Keeping those
+# here rather than in the optional dependency above means users of the `tokio`
+# feature only pay for `net`, `rt`, and `sync`.
+[target.'cfg(windows)'.dev-dependencies.tokio]
+version = "1"
+features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"]
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.61"

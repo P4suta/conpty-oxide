@@ -65,6 +65,9 @@ use windows_sys::Win32::System::IO::{CancelIo, GetOverlappedResult, OVERLAPPED};
 /// spawned: ConPTY keeps its own duplicates, and dropping ours is what lets
 /// the pipe reach end-of-file once the console host is gone.
 #[derive(Debug)]
+// Only the blocking front end builds anonymous pipes; in a tokio-only build
+// nothing but this module's own tests reaches them.
+#[cfg_attr(not(feature = "blocking"), allow(dead_code))]
 pub(crate) struct SyncPipes {
     /// Read end of conout. **We** read pseudoconsole output from this.
     pub(crate) conout_read: OwnedHandle,
@@ -87,6 +90,8 @@ pub(crate) struct SyncPipes {
 /// Returns the OS error from `CreatePipe`. If the second pipe fails, the
 /// first pipe's handles are closed by their [`OwnedHandle`] destructors before
 /// the error is returned.
+// See the note on [`SyncPipes`].
+#[cfg_attr(not(feature = "blocking"), allow(dead_code))]
 pub(crate) fn create_sync_pipes() -> io::Result<SyncPipes> {
     let (conout_read, conout_write) = create_pipe()?;
     let (conin_read, conin_write) = create_pipe()?;
@@ -162,9 +167,9 @@ const CANCEL_DRAIN_TIMEOUT_MS: u32 = 5_000;
 /// duplicates, and dropping ours is what lets the server ends observe
 /// end-of-file once the console host is gone.
 #[derive(Debug)]
-// The upcoming async front end is the consumer of these fields; until it
-// lands, only this module's tests read them.
-#[allow(dead_code)]
+// Only the async front end builds named pipes; in a blocking-only build
+// nothing but this module's own tests reaches them.
+#[cfg_attr(not(feature = "tokio"), allow(dead_code))]
 pub(crate) struct OverlappedPipes {
     /// Overlapped server end of conout. The async front end reads
     /// pseudoconsole output from this.
@@ -199,9 +204,8 @@ pub(crate) struct OverlappedPipes {
 /// before the error is returned. Any other `CreateNamedPipeW`, `CreateFileW`,
 /// or `ConnectNamedPipe` failure is returned as-is. On every failure path the
 /// handles created so far are closed by their [`OwnedHandle`] destructors.
-// The upcoming async front end is the caller; until it lands, only this
-// module's tests call this.
-#[allow(dead_code)]
+// See the note on [`OverlappedPipes`].
+#[cfg_attr(not(feature = "tokio"), allow(dead_code))]
 pub(crate) fn create_overlapped_pipes() -> io::Result<OverlappedPipes> {
     let (conout_server, conout_client) = create_connected_pair(ServerDirection::Inbound)?;
     let (conin_server, conin_client) = create_connected_pair(ServerDirection::Outbound)?;

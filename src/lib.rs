@@ -15,12 +15,28 @@
 //!
 //! # Where to start
 //!
-//! [`blocking`] holds the synchronous API: build a [`blocking::Pty`], spawn a
-//! [`blocking::Command`] into it, and read the session's output from a
-//! dedicated thread. Its module documentation covers the two rules a
-//! pseudoconsole imposes on every caller — service the output pipe from
-//! another thread, and let the library decide when to close the console.
-//!
+// The two paragraphs below are feature-gated so their intra-doc links always
+// point at something that exists: neither front end is guaranteed to be
+// compiled in, and a link into a module that was configured out is a rustdoc
+// error rather than a dead link.
+#![cfg_attr(
+    feature = "blocking",
+    doc = "[`blocking`] holds the synchronous API: build a [`blocking::Pty`], spawn a",
+    doc = "[`blocking::Command`] into it, and read the session's output from a",
+    doc = "dedicated thread. Its module documentation covers the two rules a",
+    doc = "pseudoconsole imposes on every caller — service the output pipe from",
+    doc = "another thread, and let the library decide when to close the console.",
+    doc = ""
+)]
+#![cfg_attr(
+    feature = "tokio",
+    doc = "The `tokio` feature puts the same API at the crate root in asynchronous",
+    doc = "form: a [`Pty`] implements `AsyncRead`/`AsyncWrite`, [`Child::wait`] is a",
+    doc = "future, and the same rules apply to tasks instead of threads. The two",
+    doc = "front ends are independent — their types do not mix — and either can be",
+    doc = "compiled out.",
+    doc = ""
+)]
 //! # Choosing a ConPTY implementation
 //!
 //! Sessions run on the operating system's own ConPTY unless told otherwise,
@@ -35,16 +51,16 @@
 //!   validating that its `conpty.dll` and `OpenConsole.exe` are a matching
 //!   pair before either runs.
 //! - [`ConPtyBackend::set_global_default`] installs the chosen backend for the
-//!   whole process; [`blocking::PtyBuilder::backend`] sets it per session.
+//!   whole process; a front end's `PtyBuilder::backend` sets it per session.
 
 // Every internal layer of this crate — the command builder, the pipes, the
 // pseudoconsole lifecycle, the spawn path — exists to serve a front end. With
 // none compiled in (`--no-default-features` leaves only the public type
 // definitions reachable) those layers legitimately have no consumer, so the
 // dead-code lint is silenced in exactly that configuration. It stays active in
-// every configuration that has a front end, including the default one, where
+// every configuration that has a front end — blocking, async, or both — where
 // an unused item really is a mistake.
-#![cfg_attr(not(feature = "blocking"), allow(dead_code))]
+#![cfg_attr(not(any(feature = "blocking", feature = "tokio")), allow(dead_code))]
 
 #[cfg(not(windows))]
 compile_error!(
@@ -61,6 +77,19 @@ mod status;
 
 #[cfg(feature = "blocking")]
 pub mod blocking;
+
+// Spelled `asyn` because `async` is a keyword. The module itself is private:
+// its types are the crate's async API and live at the root, so that
+// `conpty_oxide::Pty` is the async session and `conpty_oxide::blocking::Pty`
+// the synchronous one.
+#[cfg(feature = "tokio")]
+mod asyn;
+
+#[cfg(feature = "tokio")]
+pub use asyn::{
+    Child, Command, OwnedReadHalf, OwnedWriteHalf, Pty, PtyBuilder, PtyController, ReadHalf,
+    WriteHalf,
+};
 
 pub use backend::{BackendKind, ConPtyBackend};
 pub use error::{BackendError, Error, Result};

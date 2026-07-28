@@ -4,8 +4,9 @@
 //! Windows-specific plumbing that both front ends need: the pipes that carry
 //! the pseudoconsole's I/O streams, the pseudoconsole lifecycle state machine
 //! built on top of them, the job object that owns the child's process tree,
-//! the `CreateProcessW` call that attaches a child to both, and child-process
-//! exit detection.
+//! the `CreateProcessW` call that attaches a child to both, child-process exit
+//! detection, and the session state and spawn order the two front ends share
+//! verbatim.
 //!
 //! # Why ConPTY only ever gets synchronous handles
 //!
@@ -23,6 +24,7 @@ pub(crate) mod job;
 pub(crate) mod pipes;
 pub(crate) mod proc;
 pub(crate) mod pseudocon;
+pub(crate) mod session;
 pub(crate) mod wait;
 
 use std::io;
