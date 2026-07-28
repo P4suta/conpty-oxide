@@ -27,6 +27,14 @@ lint:
 test:
     cargo nextest run --all-features --no-tests=pass
 
+# Download the pinned Microsoft.Windows.Console.ConPTY bundle into vendor/conpty
+fetch-conpty:
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-conpty.ps1
+
+# Run the suite against the vendored conpty.dll as well as the system ConPTY
+test-dll: fetch-conpty
+    $env:CONPTY_OXIDE_TEST_DLL_DIR = (Join-Path $PWD 'vendor/conpty'); cargo nextest run --all-features --no-tests=pass
+
 # Everything CI checks
 ci: lint test
 

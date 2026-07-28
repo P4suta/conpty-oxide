@@ -1,1 +1,3 @@
 /target
+# Third-party binaries fetched by `just fetch-conpty`; never committed.
+/vendor
