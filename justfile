@@ -27,6 +27,10 @@ lint:
 doc:
     $env:RUSTDOCFLAGS = '-D warnings'; cargo doc --all-features --no-deps
 
+# Build the docs as docs.rs does - nightly, --cfg docsrs (needs a nightly toolchain)
+doc-docsrs:
+    $env:RUSTDOCFLAGS = '--cfg docsrs -D warnings -A rustdoc::broken_intra_doc_links'; cargo +nightly doc --all-features --no-deps
+
 # Run the test suite; nextest cannot run doctests, so those get their own pass
 test:
     cargo nextest run --all-features --no-tests=pass
@@ -41,11 +45,12 @@ test-dll: fetch-conpty
     $env:CONPTY_OXIDE_TEST_DLL_DIR = (Join-Path $PWD 'vendor/conpty'); cargo nextest run --all-features --no-tests=pass
 
 # Everything CI checks, in the order CI checks it
-ci: lint doc test
+ci: lint doc doc-docsrs test
 
 # Verify that all required tools are available
 doctor:
     rustc --version
+    rustc +nightly --version
     cargo --version
     cargo fmt --version
     cargo clippy --version

@@ -42,6 +42,31 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --all-features --no-deps
+      # docs.rs builds on nightly and passes `--cfg docsrs` (see
+      # `[package.metadata.docs.rs]`), a configuration no other job compiles.
+      # Anything reachable only through it - the `feature(doc_cfg)` gate in
+      # src/lib.rs above all - is therefore invisible to every check above,
+      # and a mistake there does not degrade the published page, it replaces
+      # it with a build log. Reproducing that exact configuration here keeps
+      # the docs.rs build a CI failure rather than a post-release discovery.
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 (nightly)
+        with:
+          toolchain: nightly
+      # `+nightly` explicitly: the install above also makes nightly rustup's
+      # default, and pinning the toolchain per command keeps this step correct
+      # no matter where it sits among the others.
+      #
+      # Intra-doc links are exempted here because the stable `rustdoc` step
+      # already gates them with `-D warnings` over the same crate and the same
+      # features, so nothing is lost - while nightly resolves links against a
+      # std that is still moving. As of nightly 1.98 it fails to resolve the
+      # allocation-gated `io::Error` methods (`new`, `other`, `into_inner`,
+      # `downcast`) that stable resolves fine, which would make this step red
+      # for a reason that has nothing to do with this crate.
+      - name: rustdoc (docs.rs configuration)
+        env:
+          RUSTDOCFLAGS: --cfg docsrs -D warnings -A rustdoc::broken_intra_doc_links
+        run: cargo +nightly doc --all-features --no-deps
       - name: typos
         uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
 
