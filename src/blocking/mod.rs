@@ -87,6 +87,7 @@
 //! ```
 
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle, RawHandle};
@@ -266,11 +267,23 @@ impl PtyBuilder {
 /// Because closing the input pipe is part of that teardown, dropping a `Pty`
 /// whose child is still running **terminates the child** — see the module
 /// documentation. Keep the session alive until [`Child::wait`] returns.
-#[derive(Debug)]
 pub struct Pty {
     reader: ConoutReader,
     writer: ConinWriter,
     inner: Arc<Session>,
+}
+
+/// Shows the session's identity — its size and backend — rather than raw
+/// handle values and the private lifecycle state, which are noise that varies
+/// between runs and would otherwise become de-facto public surface.
+/// [`ConPtyBackend`]'s own `Debug` follows the same rule.
+impl fmt::Debug for Pty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Pty")
+            .field("size", &self.inner.size())
+            .field("backend_kind", self.inner.backend_kind())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Pty {
@@ -420,9 +433,16 @@ impl Write for Pty {
 }
 
 /// Borrowed read half of a [`Pty`], from [`Pty::split`].
-#[derive(Debug)]
 pub struct ReadHalf<'a> {
     reader: &'a mut ConoutReader,
+}
+
+/// Deliberately opaque: the interesting state lives in the [`Pty`] this
+/// borrows from.
+impl fmt::Debug for ReadHalf<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadHalf").finish_non_exhaustive()
+    }
 }
 
 impl Read for ReadHalf<'_> {
@@ -435,9 +455,16 @@ impl Read for ReadHalf<'_> {
 ///
 /// Writing has the same semantics as [`OwnedWriteHalf`]; dropping this borrow
 /// does not close anything, because the pipe stays owned by the [`Pty`].
-#[derive(Debug)]
 pub struct WriteHalf<'a> {
     writer: &'a mut ConinWriter,
+}
+
+/// Deliberately opaque: the interesting state lives in the [`Pty`] this
+/// borrows from.
+impl fmt::Debug for WriteHalf<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WriteHalf").finish_non_exhaustive()
+    }
 }
 
 impl Write for WriteHalf<'_> {
@@ -468,9 +495,16 @@ impl Write for WriteHalf<'_> {
 /// The bytes are a UTF-8 virtual-terminal stream. They arrive in whatever
 /// chunks the console host produced, so a multi-byte character can straddle
 /// two reads — decode across reads (or buffer) rather than per read.
-#[derive(Debug)]
 pub struct OwnedReadHalf {
     reader: ConoutReader,
+}
+
+/// Deliberately opaque: what this half owns — a pipe handle and lifecycle
+/// bookkeeping — is exactly what `Debug` must not turn into public surface.
+impl fmt::Debug for OwnedReadHalf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OwnedReadHalf").finish_non_exhaustive()
+    }
 }
 
 impl Read for OwnedReadHalf {
@@ -495,9 +529,15 @@ impl Read for OwnedReadHalf {
 /// code `0xC000013A` (`STATUS_CONTROL_C_EXIT`) and loses any output it had not
 /// written yet. Hold on to this half until the child has exited — or drop it
 /// deliberately, as a way to end a session that ignores everything else.
-#[derive(Debug)]
 pub struct OwnedWriteHalf {
     writer: ConinWriter,
+}
+
+/// Deliberately opaque: nothing but the conin pipe handle lives here.
+impl fmt::Debug for OwnedWriteHalf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OwnedWriteHalf").finish_non_exhaustive()
+    }
 }
 
 impl Write for OwnedWriteHalf {
@@ -516,9 +556,18 @@ impl Write for OwnedWriteHalf {
 /// and write halves live on other threads. Dropping it does not end the
 /// session: the read half keeps the lifecycle state alive and the
 /// pseudoconsole is closed once every part is gone.
-#[derive(Debug)]
 pub struct PtyController {
     inner: Arc<Session>,
+}
+
+/// Shows the session's identity, exactly as [`Pty`]'s `Debug` does.
+impl fmt::Debug for PtyController {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PtyController")
+            .field("size", &self.inner.size())
+            .field("backend_kind", self.inner.backend_kind())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PtyController {
@@ -838,7 +887,6 @@ impl Command {
 /// Dropping a `Child` does not wait for the process. Unless
 /// [`Command::kill_on_drop`] was set, the tree keeps running; what ends the
 /// *session* is the pseudoconsole's own teardown (see the module docs).
-#[derive(Debug)]
 pub struct Child {
     waiter: ProcessWaiter,
     job: Job,
@@ -847,6 +895,19 @@ pub struct Child {
     /// Cached once the process is known to have exited, so repeated
     /// `wait`/`try_wait` calls stay cheap and consistent.
     status: Option<ExitStatus>,
+}
+
+/// Shows the child's identity — pid, drop policy, and any cached exit status
+/// — rather than the raw process and job handles, whose values are noise that
+/// varies between runs.
+impl fmt::Debug for Child {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Child")
+            .field("pid", &self.pid)
+            .field("kill_on_drop", &self.kill_on_drop)
+            .field("status", &self.status)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Child {
@@ -1104,6 +1165,45 @@ mod tests {
         assert_send_sync::<Child>();
         assert_send_sync::<Command>();
         assert_send_sync::<PtyBuilder>();
+    }
+
+    /// `Debug` output ends up in logs and bug reports, so it must show a
+    /// session's identity — and must not leak raw handle values or the
+    /// private lifecycle state machine, which would make internals part of
+    /// the observable surface.
+    #[test]
+    fn debug_shows_identity_not_internals() {
+        complete_within("debug_shows_identity_not_internals", || {
+            let mut pty = pty();
+            let rendered = format!("{pty:?}");
+            assert!(rendered.starts_with("Pty"), "{rendered}");
+            assert!(rendered.contains("size"), "{rendered}");
+            assert!(rendered.contains("System"), "{rendered}");
+            for leak in ["hpcon", "File", "handle", "state", "released"] {
+                assert!(!rendered.contains(leak), "`{leak}` leaked: {rendered}");
+            }
+
+            let (read_half, write_half) = pty.split();
+            assert_eq!(format!("{read_half:?}"), "ReadHalf { .. }");
+            assert_eq!(format!("{write_half:?}"), "WriteHalf { .. }");
+
+            let mut running = Running::start(Command::new("cmd.exe").args(["/c", "exit", "0"]));
+            let rendered = format!("{:?}", running.child);
+            assert!(rendered.contains("pid"), "{rendered}");
+            assert!(!rendered.contains("handle"), "{rendered}");
+            running.child.wait().expect("waiting must succeed");
+            let rendered = format!("{:?}", running.child);
+            assert!(
+                rendered.contains("status"),
+                "a reaped child must show its cached status: {rendered}"
+            );
+
+            assert_eq!(format!("{:?}", running.writer), "OwnedWriteHalf { .. }");
+            let rendered = format!("{:?}", running.controller);
+            assert!(rendered.starts_with("PtyController"), "{rendered}");
+            assert!(rendered.contains("backend_kind"), "{rendered}");
+            running.finish();
+        });
     }
 
     #[test]
