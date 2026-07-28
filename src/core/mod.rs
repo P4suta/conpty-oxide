@@ -2,9 +2,9 @@
 //!
 //! Nothing in this module tree is part of the public API. It holds the
 //! Windows-specific plumbing that both front ends need: the synchronous
-//! anonymous pipes that carry the pseudoconsole's I/O streams, and (in later
-//! phases) the pseudoconsole lifecycle and child-process handling built on
-//! top of them.
+//! anonymous pipes that carry the pseudoconsole's I/O streams, the
+//! pseudoconsole lifecycle state machine built on top of them, and
+//! child-process exit detection.
 //!
 //! # Why synchronous pipes
 //!
@@ -16,3 +16,9 @@
 //! services these synchronous handles from blocking worker threads instead.
 
 pub(crate) mod pipes;
+// TODO: drop the allows once the spawn/session layer consumes the lifecycle
+// core and the waiter from non-test code.
+#[allow(dead_code)]
+pub(crate) mod pseudocon;
+#[allow(dead_code)]
+pub(crate) mod wait;

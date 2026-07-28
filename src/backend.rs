@@ -53,14 +53,13 @@ pub(crate) type HPCON = *mut c_void;
 
 /// `PSEUDOCONSOLE_INHERIT_CURSOR`, for `CreatePseudoConsole`'s `dwFlags`.
 ///
-/// This crate never sets it. The flag makes the pseudoconsole emit a Device
+/// Off by default everywhere in this crate, and no public API enables it
+/// yet. The flag makes the pseudoconsole emit a Device
 /// Status Report (`ESC [ 6 n`) on conout immediately after creation and stop
 /// processing input entirely until the answer is written back to conin. A
 /// caller that is not already pumping both pipes therefore deadlocks, and
 /// there are unresolved reports of the flag hanging teardown as well
 /// (microsoft/terminal#17688). Inheriting the cursor is not worth that.
-// TODO: drop the allow once a builder option exposes this.
-#[allow(dead_code)]
 pub(crate) const PSEUDOCONSOLE_INHERIT_CURSOR: u32 = 0x1;
 
 /// Prefix under which the standalone `conpty.dll` exports its entry points.
@@ -343,8 +342,6 @@ impl ConPtyBackend {
     /// # Errors
     ///
     /// Returns the failing `HRESULT` mapped to an [`io::Error`].
-    // TODO: drop the allow once the pseudoconsole lifecycle core calls this.
-    #[allow(dead_code)]
     pub(crate) fn create(
         &self,
         size: Size,
@@ -383,8 +380,6 @@ impl ConPtyBackend {
     ///
     /// `hpc` must be a live handle from [`Self::create`] on *this* backend
     /// that has not yet been passed to [`Self::close`].
-    // TODO: drop the allow once the pseudoconsole lifecycle core calls this.
-    #[allow(dead_code)]
     pub(crate) unsafe fn resize(&self, hpc: HPCON, size: Size) -> io::Result<()> {
         let (rows, cols) = size.to_i16_pair();
         let size = COORD { X: cols, Y: rows };
@@ -414,8 +409,6 @@ impl ConPtyBackend {
     /// - It must never be called from the thread that reads conout, because
     ///   that thread is exactly the one that would have to make progress for
     ///   the call to return.
-    // TODO: drop the allow once the pseudoconsole lifecycle core calls this.
-    #[allow(dead_code)]
     pub(crate) unsafe fn close(&self, hpc: HPCON) {
         // SAFETY: `hpc` is live and unclosed per this function's contract.
         unsafe { (self.inner.api.close)(hpc) }
@@ -444,8 +437,6 @@ impl ConPtyBackend {
     ///
     /// `hpc` must be a live handle from [`Self::create`] on *this* backend
     /// that has not yet been passed to [`Self::close`].
-    // TODO: drop the allow once the pseudoconsole lifecycle core calls this.
-    #[allow(dead_code)]
     #[must_use]
     pub(crate) unsafe fn release(&self, hpc: HPCON) -> Option<io::Result<()>> {
         let release = self.inner.api.release?;

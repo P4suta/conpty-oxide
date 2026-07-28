@@ -92,8 +92,6 @@ impl Size {
     ///
     /// Takes `self` by value because `Size` is `Copy`
     /// (`clippy::wrong_self_convention`).
-    // TODO: drop the allow once the pty backend consumes this.
-    #[allow(dead_code)]
     pub(crate) fn to_i16_pair(self) -> (i16, i16) {
         (self.rows as i16, self.cols as i16)
     }
