@@ -46,6 +46,23 @@ pub enum Error {
     #[error("failed to resize pseudoconsole")]
     Resize(#[source] io::Error),
 
+    /// `ClearPseudoConsole` (or the equivalent backend call) failed.
+    #[error("failed to clear pseudoconsole")]
+    Clear(#[source] io::Error),
+
+    /// The loaded ConPTY backend does not provide the requested operation.
+    ///
+    /// Capabilities differ between the ConPTY built into Windows and a bundled
+    /// `conpty.dll`, and between versions of each. Clearing the buffer, for
+    /// instance, exists only in the standalone DLL, so a caller that wants it
+    /// has to either ship one or handle this error.
+    #[error("the ConPTY backend does not support {feature}")]
+    UnsupportedFeature {
+        /// Name of the missing capability, spelled as the ConPTY export that
+        /// would provide it (e.g. `ClearPseudoConsole`).
+        feature: &'static str,
+    },
+
     /// A requested size was outside the valid range.
     ///
     /// Both dimensions must be in `1..=`[`Size::MAX_DIMENSION`], because
@@ -105,26 +122,34 @@ pub enum BackendError {
     /// `OpenConsole.exe` was not found next to the bundled `conpty.dll`.
     ///
     /// A bundled `conpty.dll` delegates console hosting to an
-    /// `OpenConsole.exe` located in the same directory; without it the DLL is
-    /// unusable.
+    /// `OpenConsole.exe` from the same package; without it the DLL falls back
+    /// to the operating system's own console host, which defeats the point of
+    /// bundling one. Both the DLL's own directory and the architecture
+    /// subdirectories (`x64`, `arm64`, `x86`) it searches are checked.
     #[error("OpenConsole.exe not found next to `{}`", .dll.display())]
     OpenConsoleMissing {
         /// Path of the DLL that requires the missing `OpenConsole.exe`.
         dll: PathBuf,
     },
 
-    /// The bundled DLL's version does not match what this executable expects.
+    /// The bundled `conpty.dll` and its `OpenConsole.exe` are from different
+    /// releases, or their versions could not be read.
+    ///
+    /// The two communicate over a private, versioned protocol and are shipped
+    /// as a pair for that reason; running a mismatched pair crashes the client
+    /// process rather than degrading (wezterm#7774).
     #[error(
-        "version mismatch for `{}`: dll version {dll_version}, \
-         exe expects {exe_version}",
+        "version mismatch: `{}` reports {dll_version} \
+         but its OpenConsole.exe reports {exe_version}",
         .dll.display()
     )]
     VersionMismatch {
         /// Path of the mismatched DLL.
         dll: PathBuf,
-        /// Version reported by the DLL.
+        /// `ProductVersion` reported by the DLL, or `unknown`.
         dll_version: String,
-        /// Version this executable was built against.
+        /// `ProductVersion` reported by the accompanying `OpenConsole.exe`, or
+        /// `unknown`.
         exe_version: String,
     },
 
@@ -164,7 +189,7 @@ mod tests {
 
     #[test]
     fn display_messages() {
-        let cases: [(Error, &str); 6] = [
+        let cases: [(Error, &str); 8] = [
             (
                 Error::CreateConsole(io_err(io::ErrorKind::Other)),
                 "failed to create pseudoconsole",
@@ -179,6 +204,16 @@ mod tests {
             (
                 Error::Resize(io_err(io::ErrorKind::Other)),
                 "failed to resize pseudoconsole",
+            ),
+            (
+                Error::Clear(io_err(io::ErrorKind::Other)),
+                "failed to clear pseudoconsole",
+            ),
+            (
+                Error::UnsupportedFeature {
+                    feature: "ClearPseudoConsole",
+                },
+                "the ConPTY backend does not support ClearPseudoConsole",
             ),
             (
                 Error::InvalidSize { rows: 0, cols: 80 },
@@ -228,7 +263,8 @@ mod tests {
                     dll_version: "1.19".to_string(),
                     exe_version: "1.22".to_string(),
                 },
-                "version mismatch for `C:\\app\\conpty.dll`: dll version 1.19, exe expects 1.22",
+                "version mismatch: `C:\\app\\conpty.dll` reports 1.19 \
+                 but its OpenConsole.exe reports 1.22",
             ),
             (
                 BackendError::Unsupported,

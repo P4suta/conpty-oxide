@@ -334,21 +334,43 @@ impl ConsoleShared {
         // SAFETY: `hpcon` is live — `close` is not `Done`, and holding the
         // state lock prevents any close from claiming it during the call.
         // `ResizePseudoConsole` is a quick signal write, safe under the lock.
-        unsafe { self.backend.resize(self.hpcon, size) }.map_err(|err| {
-            if crate::core::is_disconnect_error(&err) {
-                // In released mode nothing closes the `HPCON` when the session
-                // ends by natural end-of-file, so a resize after that point
-                // reaches a console host that is already gone and fails with a
-                // disconnect-class code (observed: `ERROR_NO_DATA`). Legacy
-                // mode reports the same situation through the `Done` check
-                // above; normalizing here keeps the `NotConnected` contract
-                // identical across Windows versions. The original error stays
-                // available as the source.
-                io::Error::new(io::ErrorKind::NotConnected, err)
-            } else {
-                err
-            }
-        })
+        unsafe { self.backend.resize(self.hpcon, size) }.map_err(normalize_session_end)
+    }
+
+    /// Calls `ClearPseudoConsole`, discarding the console host's scrollback
+    /// and screen.
+    ///
+    /// Follows exactly the same discipline as [`Self::resize`]: the FFI call
+    /// runs under the state lock so no close can claim the `HPCON` underneath
+    /// it, and it is a quick write to the signal pipe rather than anything
+    /// that can block.
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`io::ErrorKind::Unsupported`] when the backend has no
+    /// `ClearPseudoConsole` export, with [`io::ErrorKind::NotConnected`] once
+    /// the session is over — whether the pseudoconsole has been closed or the
+    /// console host of a released session has already exited on its own — or
+    /// with the backend's error.
+    pub(crate) fn clear(&self) -> io::Result<()> {
+        let state = self.lock();
+        if state.close == CloseState::Done {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "the pseudoconsole has been closed",
+            ));
+        }
+        // SAFETY: `hpcon` is live — `close` is not `Done`, and holding the
+        // state lock prevents any close from claiming it during the call.
+        match unsafe { self.backend.clear(self.hpcon) } {
+            // The front ends check `supports_clear` first and report a typed
+            // error, so this is the defensive answer for a direct caller.
+            None => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "this ConPTY backend does not export ClearPseudoConsole",
+            )),
+            Some(result) => result.map_err(normalize_session_end),
+        }
     }
 
     /// Returns whether the session is in released mode.
@@ -439,6 +461,24 @@ impl Drop for ConsoleShared {
     }
 }
 
+/// Normalizes "the console host is already gone" into
+/// [`io::ErrorKind::NotConnected`].
+///
+/// In released mode nothing closes the `HPCON` when the session ends by natural
+/// end-of-file, so a signal sent after that point reaches a console host that
+/// is already gone and fails with a disconnect-class code (observed:
+/// `ERROR_NO_DATA`). Legacy mode reports the same situation through the
+/// `CloseState::Done` check the callers make first; normalizing here keeps the
+/// `NotConnected` contract identical across Windows versions. The original
+/// error stays available as the source.
+fn normalize_session_end(err: io::Error) -> io::Error {
+    if crate::core::is_disconnect_error(&err) {
+        io::Error::new(io::ErrorKind::NotConnected, err)
+    } else {
+        err
+    }
+}
+
 /// A live pseudoconsole, created with `CreatePseudoConsole`.
 ///
 /// This is the controller half of a session: it creates the console, exposes
@@ -524,6 +564,11 @@ impl PseudoConsole {
     /// See [`ConsoleShared::resize`].
     pub(crate) fn resize(&self, size: Size) -> io::Result<()> {
         self.shared.resize(size)
+    }
+
+    /// See [`ConsoleShared::clear`].
+    pub(crate) fn clear(&self) -> io::Result<()> {
+        self.shared.clear()
     }
 
     /// See [`ConsoleShared::is_released`].
@@ -618,6 +663,34 @@ mod tests {
         let err = console
             .resize(Size::new(30, 100))
             .expect_err("resize after close must fail");
+        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
+        drop(conin_write);
+    }
+
+    /// Whether `clear` works at all is a property of the backend, but the
+    /// *state machine* around it must behave the same everywhere: refuse once
+    /// the pseudoconsole has been closed, exactly as `resize` does.
+    #[test]
+    fn clear_matches_the_backend_capability_and_fails_after_close() {
+        let backend = backend();
+        let supported = backend.supports_clear();
+        let (console, conout_read, conin_write) = console_and_user_ends(backend);
+
+        match console.clear() {
+            Ok(()) => assert!(supported, "clear succeeded without a clear export"),
+            Err(err) if err.kind() == io::ErrorKind::Unsupported => {
+                assert!(!supported, "clear refused although the export is present");
+            }
+            Err(err) => panic!("unexpected error: {err:?}"),
+        }
+
+        // Retire the reader, then close.
+        drop(conout_read);
+        console.shared().notify_reader_closed();
+        console.shared().request_close();
+        assert!(console.shared().is_closed());
+
+        let err = console.clear().expect_err("clear after close must fail");
         assert_eq!(err.kind(), io::ErrorKind::NotConnected);
         drop(conin_write);
     }

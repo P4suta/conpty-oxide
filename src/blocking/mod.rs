@@ -111,6 +111,10 @@ use crate::status::ExitStatus;
 /// `TerminateProcess`.
 const KILL_EXIT_CODE: u32 = 1;
 
+/// Capability name reported by [`Error::UnsupportedFeature`] when the backend
+/// cannot clear the pseudoconsole.
+const CLEAR_FEATURE: &str = "ClearPseudoConsole";
+
 /// Builder for a [`Pty`].
 ///
 /// Created by [`Pty::builder`]. Every option has a working default, so
@@ -288,6 +292,21 @@ impl PtyInner {
         *self.size.lock().unwrap_or_else(PoisonError::into_inner) = size;
         Ok(())
     }
+
+    fn clear(&self) -> Result<()> {
+        // Asked before the call so a missing capability is reported as such
+        // rather than as an opaque I/O failure.
+        if !self.backend.supports_clear() {
+            return Err(Error::UnsupportedFeature {
+                feature: CLEAR_FEATURE,
+            });
+        }
+        self.console.clear().map_err(Error::Clear)
+    }
+
+    fn supports_clear(&self) -> bool {
+        self.backend.supports_clear()
+    }
 }
 
 /// A pseudoconsole session: the console plus both ends of its I/O.
@@ -342,6 +361,44 @@ impl Pty {
     #[must_use]
     pub fn size(&self) -> Size {
         self.inner.size()
+    }
+
+    /// Clears the pseudoconsole's screen and scrollback.
+    ///
+    /// This is the "clear buffer" operation of a terminal emulator, performed
+    /// by the console host itself: everything it has rendered so far is
+    /// discarded, and the client keeps running untouched. It is a signal, not
+    /// output — nothing is written into the session's input pipe and the child
+    /// is not notified.
+    ///
+    /// The session's reader is unaffected: bytes already delivered stay
+    /// delivered. What changes is what the console host will re-render, so a
+    /// full-screen application repaints on its next update.
+    ///
+    /// # Availability
+    ///
+    /// `ClearPseudoConsole` is not part of the public Windows SDK and
+    /// `kernel32.dll` does not export it, so this fails with
+    /// [`Error::UnsupportedFeature`] on the system backend. Bundling a
+    /// `conpty.dll` (see [`ConPtyBackend::from_dir`]) is what makes it
+    /// available; [`Pty::supports_clear`] answers in advance.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::UnsupportedFeature`] if the backend has no clear export.
+    /// - [`Error::Clear`] wrapping the backend failure, or an
+    ///   [`io::ErrorKind::NotConnected`] error once the session has been torn
+    ///   down.
+    ///
+    /// [`ConPtyBackend::from_dir`]: crate::ConPtyBackend::from_dir
+    pub fn clear(&self) -> Result<()> {
+        self.inner.clear()
+    }
+
+    /// Returns whether [`Pty::clear`] is available on this session's backend.
+    #[must_use]
+    pub fn supports_clear(&self) -> bool {
+        self.inner.supports_clear()
     }
 
     /// Returns which ConPTY implementation backs this session.
@@ -523,6 +580,25 @@ impl PtyController {
     #[must_use]
     pub fn size(&self) -> Size {
         self.inner.size()
+    }
+
+    /// Clears the pseudoconsole's screen and scrollback. See [`Pty::clear`].
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::UnsupportedFeature`] if the backend has no clear export.
+    /// - [`Error::Clear`] wrapping the backend failure, or an
+    ///   [`io::ErrorKind::NotConnected`] error once the session has been torn
+    ///   down.
+    pub fn clear(&self) -> Result<()> {
+        self.inner.clear()
+    }
+
+    /// Returns whether [`PtyController::clear`] is available on this session's
+    /// backend.
+    #[must_use]
+    pub fn supports_clear(&self) -> bool {
+        self.inner.supports_clear()
     }
 
     /// Returns which ConPTY implementation backs this session.
@@ -1226,6 +1302,42 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
         drop(writer);
+    }
+
+    /// The system backend exports no `ClearPseudoConsole`, so on an ordinary
+    /// machine this exercises the typed refusal. On a session backed by a
+    /// bundled `conpty.dll` the same test proves the call goes through — the
+    /// assertion is that the capability query and the operation agree.
+    #[test]
+    fn clear_agrees_with_the_reported_capability() {
+        complete_within("clear_agrees_with_the_reported_capability", || {
+            let pty = pty();
+            let supported = pty.supports_clear();
+            let (_reader, _writer, controller) = pty.into_split();
+            assert_eq!(controller.supports_clear(), supported);
+
+            match controller.clear() {
+                Ok(()) => assert!(supported, "clear succeeded without a clear export"),
+                Err(Error::UnsupportedFeature { feature }) => {
+                    assert!(!supported, "clear refused although the export is present");
+                    assert_eq!(feature, CLEAR_FEATURE);
+                }
+                Err(other) => panic!("unexpected error: {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn clear_on_a_pty_matches_clear_on_its_controller() {
+        complete_within("clear_on_a_pty_matches_clear_on_its_controller", || {
+            let pty = pty();
+            let from_pty = pty.clear();
+            let supported = pty.supports_clear();
+            let (_reader, _writer, controller) = pty.into_split();
+            let from_controller = controller.clear();
+            assert_eq!(from_pty.is_ok(), supported);
+            assert_eq!(from_controller.is_ok(), supported);
+        });
     }
 
     #[test]

@@ -20,6 +20,22 @@
 //! dedicated thread. Its module documentation covers the two rules a
 //! pseudoconsole imposes on every caller — service the output pipe from
 //! another thread, and let the library decide when to close the console.
+//!
+//! # Choosing a ConPTY implementation
+//!
+//! Sessions run on the operating system's own ConPTY unless told otherwise,
+//! which needs no setup. An application that ships the standalone
+//! `conpty.dll` (the `Microsoft.Windows.Console.ConPTY` NuGet package) can get
+//! the newer console host's behaviour on older Windows versions instead:
+//!
+//! - [`ConPtyBackend::auto`] uses a bundle found next to the executable and
+//!   falls back to the system implementation, which is what most applications
+//!   want and what the default backend does.
+//! - [`ConPtyBackend::from_dir`] loads a bundle from a directory you name,
+//!   validating that its `conpty.dll` and `OpenConsole.exe` are a matching
+//!   pair before either runs.
+//! - [`ConPtyBackend::set_global_default`] installs the chosen backend for the
+//!   whole process; [`blocking::PtyBuilder::backend`] sets it per session.
 
 // Every internal layer of this crate — the command builder, the pipes, the
 // pseudoconsole lifecycle, the spawn path — exists to serve a front end. With
