@@ -1,0 +1,11 @@
+# cargo-nextest configuration.
+#
+# Every integration test in this crate guards against a *hang* (a
+# `ClosePseudoConsole` that never returns, an undrained output pipe, a child
+# that can no longer make progress). The tests carry their own watchdogs, but
+# nextest's slow-timeout is the outer net: a test that is still running after
+# 30 seconds is reported as slow, and after a second period it is killed
+# outright so the run always terminates.
+
+[profile.default]
+slow-timeout = { period = "30s", terminate-after = 2 }
