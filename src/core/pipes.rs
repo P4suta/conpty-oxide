@@ -39,8 +39,6 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 /// `CreatePseudoConsole` must be closed by us as soon as the child has been
 /// spawned: ConPTY keeps its own duplicates, and dropping ours is what lets
 /// the pipe reach end-of-file once the console host is gone.
-// TODO: drop the allow once the pseudoconsole lifecycle core consumes these.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct SyncPipes {
     /// Read end of conout. **We** read pseudoconsole output from this.
@@ -64,8 +62,6 @@ pub(crate) struct SyncPipes {
 /// Returns the OS error from `CreatePipe`. If the second pipe fails, the
 /// first pipe's handles are closed by their [`OwnedHandle`] destructors before
 /// the error is returned.
-// TODO: drop the allow once the pseudoconsole lifecycle core calls this.
-#[allow(dead_code)]
 pub(crate) fn create_sync_pipes() -> io::Result<SyncPipes> {
     let (conout_read, conout_write) = create_pipe()?;
     let (conin_read, conin_write) = create_pipe()?;

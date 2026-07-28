@@ -16,14 +16,8 @@
 //! therefore cannot hand tokio's overlapped named-pipe handles to ConPTY; it
 //! services these synchronous handles from blocking worker threads instead.
 
-// TODO: drop the allows once the public session layer consumes these modules
-// from non-test code.
-#[allow(dead_code)]
 pub(crate) mod job;
 pub(crate) mod pipes;
-#[allow(dead_code)]
 pub(crate) mod proc;
-#[allow(dead_code)]
 pub(crate) mod pseudocon;
-#[allow(dead_code)]
 pub(crate) mod wait;

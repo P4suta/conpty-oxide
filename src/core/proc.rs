@@ -382,9 +382,10 @@ mod tests {
         /// Taken by [`Session::drain_conout`]; still here when a test never
         /// starts a reader, so dropping the session retires it either way.
         conout_read: Option<OwnedHandle>,
-        /// Never written to. Holding it open is what keeps a child blocked in
-        /// `pause` instead of seeing end-of-file on its console input.
-        conin_write: Option<OwnedHandle>,
+        /// Never read and never written to: holding the handle open is what
+        /// keeps a child blocked in `pause` instead of seeing end-of-file on
+        /// its console input.
+        _conin_write: OwnedHandle,
     }
 
     impl Session {
@@ -403,7 +404,7 @@ mod tests {
                 console,
                 job: Job::create(kill_on_close).expect("creating a job must succeed"),
                 conout_read: Some(conout_read),
-                conin_write: Some(conin_write),
+                _conin_write: conin_write,
             }
         }
 

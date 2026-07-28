@@ -18,7 +18,7 @@
 //! end-of-file (`ERROR_BROKEN_PIPE`) to the reader.
 
 use std::io;
-use std::os::windows::io::{AsRawHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -110,6 +110,14 @@ impl ProcessWaiter {
             return Err(io::Error::last_os_error());
         }
         Ok(code)
+    }
+}
+
+/// Borrows the process handle, e.g. to duplicate it for a watcher or to expose
+/// it through the public `Child` API.
+impl AsHandle for ProcessWaiter {
+    fn as_handle(&self) -> BorrowedHandle<'_> {
+        self.process.as_handle()
     }
 }
 

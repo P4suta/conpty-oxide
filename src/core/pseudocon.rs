@@ -343,11 +343,21 @@ impl ConsoleShared {
     /// Returns whether a `ReleasePseudoConsole` attempt failed.
     ///
     /// The session then behaves exactly like one on a release-less backend.
+    ///
+    /// Test-only: the front ends learn about a failed release from
+    /// [`Self::release_after_spawn`]'s `Err`, which they must already handle,
+    /// so nothing in the shipped library queries this after the fact.
+    #[cfg(test)]
     pub(crate) fn release_failed(&self) -> bool {
         self.lock().release_failed
     }
 
     /// Returns whether `ClosePseudoConsole` has run (or been claimed).
+    ///
+    /// Test-only: closing is driven entirely by state transitions, so no
+    /// production path needs to poll for it — the observable effect is
+    /// end-of-file on the output pipe.
+    #[cfg(test)]
     pub(crate) fn is_closed(&self) -> bool {
         self.lock().close == CloseState::Done
     }
@@ -501,6 +511,11 @@ impl PseudoConsole {
     }
 
     /// See [`ConsoleShared::is_released`].
+    ///
+    /// Test-only: the spawn path learns the mode from
+    /// [`Self::release_after_spawn`]'s return value, and the legacy watcher
+    /// asks the shared core directly.
+    #[cfg(test)]
     pub(crate) fn is_released(&self) -> bool {
         self.shared.is_released()
     }

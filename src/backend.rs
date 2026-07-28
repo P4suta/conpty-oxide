@@ -318,8 +318,6 @@ impl ConPtyBackend {
     /// # Errors
     ///
     /// Propagates [`Self::system`]'s error when no default is installed.
-    // TODO: drop the allow once the public builders resolve their backend.
-    #[allow(dead_code)]
     pub(crate) fn resolve_default() -> Result<Self, BackendError> {
         match GLOBAL_DEFAULT.get() {
             Some(backend) => Ok(backend.clone()),

@@ -16,6 +16,10 @@ blocking = []
 tokio = ["dep:tokio"]
 tracing = ["dep:tracing"]
 
+[[example]]
+name = "blocking_echo"
+required-features = ["blocking"]
+
 [target.'cfg(windows)'.dependencies]
 thiserror = "2"
 tokio = { version = "1", optional = true, features = ["net", "rt", "sync"] }
