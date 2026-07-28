@@ -71,10 +71,13 @@
 // an unused item really is a mistake.
 #![cfg_attr(not(any(feature = "blocking", feature = "tokio")), allow(dead_code))]
 // docs.rs passes `--cfg docsrs` (see `[package.metadata.docs.rs]`), which
-// turns on the nightly-only `doc_auto_cfg` feature: every feature-gated item
-// then carries an "Available on crate feature … only" badge. Stable builds
-// never see the cfg, so this is inert everywhere else.
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+// turns on the nightly-only `doc_cfg` feature: every feature-gated item then
+// carries an "Available on crate feature … only" badge. Stable builds never
+// see the cfg, so this is inert everywhere else. (The badges used to need a
+// separate `doc_auto_cfg` feature; that was merged into `doc_cfg` and removed
+// in 1.92 — rust-lang/rust#138907 — so naming it here breaks the docs.rs
+// build.)
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Every public item carries documentation, and this keeps it that way. `warn`
 // rather than `deny` so a half-written local edit still builds; every CI clippy
 // invocation passes `-D warnings`, which promotes this to a hard error there.

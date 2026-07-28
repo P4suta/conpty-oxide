@@ -59,7 +59,7 @@ features = [
 
 # docs.rs builds with default features unless told otherwise, which would drop
 # the whole async front end from the published API reference. `--cfg docsrs`
-# additionally enables the nightly `doc_auto_cfg` badges (see src/lib.rs).
+# additionally enables the nightly `doc_cfg` badges (see src/lib.rs).
 [package.metadata.docs.rs]
 all-features = true
 default-target = "x86_64-pc-windows-msvc"
