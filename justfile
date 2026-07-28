@@ -23,9 +23,14 @@ lint:
     typos
     taplo fmt --check
 
-# Run the test suite
+# Build the documentation, failing on any rustdoc warning (missing docs included)
+doc:
+    $env:RUSTDOCFLAGS = '-D warnings'; cargo doc --all-features --no-deps
+
+# Run the test suite; nextest cannot run doctests, so those get their own pass
 test:
     cargo nextest run --all-features --no-tests=pass
+    cargo test --all-features --doc
 
 # Download the pinned Microsoft.Windows.Console.ConPTY bundle into vendor/conpty
 fetch-conpty:
@@ -35,8 +40,8 @@ fetch-conpty:
 test-dll: fetch-conpty
     $env:CONPTY_OXIDE_TEST_DLL_DIR = (Join-Path $PWD 'vendor/conpty'); cargo nextest run --all-features --no-tests=pass
 
-# Everything CI checks
-ci: lint test
+# Everything CI checks, in the order CI checks it
+ci: lint doc test
 
 # Verify that all required tools are available
 doctor:

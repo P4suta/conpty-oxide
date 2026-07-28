@@ -33,6 +33,15 @@ jobs:
         run: cargo clippy --features tokio --all-targets -- -D warnings
       - name: clippy (all features)
         run: cargo clippy --all-features --all-targets -- -D warnings
+      # Rustdoc's own diagnostics — broken intra-doc links, unclosed code
+      # fences, invalid HTML — are invisible to `cargo build` and `cargo
+      # clippy`, so a published page can rot without any other job noticing.
+      # `-D warnings` also promotes the crate's `#![warn(missing_docs)]`, which
+      # makes this the second gate on an undocumented public item.
+      - name: rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --all-features --no-deps
       - name: typos
         uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
 
@@ -92,6 +101,14 @@ jobs:
         run: cargo build --all-features
       - name: test
         run: cargo nextest run --all-features --no-tests=pass
+      # nextest cannot run doctests, so without this step the examples in the
+      # public documentation are never compiled or executed by CI. Running them
+      # here rather than in `hygiene` puts them on the same OS × toolchain
+      # matrix as the rest of the suite: the doctests are the API's advertised
+      # usage, so they should be held to the MSRV and to both ConPTY lifecycle
+      # modes like every other caller.
+      - name: doctests
+        run: cargo test --all-features --doc
 
   ci-required:
     name: CI required
