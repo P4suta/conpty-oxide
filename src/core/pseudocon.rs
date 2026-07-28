@@ -319,8 +319,10 @@ impl ConsoleShared {
     ///
     /// # Errors
     ///
-    /// Fails with [`io::ErrorKind::NotConnected`] once the pseudoconsole has
-    /// been closed, or with the backend's error.
+    /// Fails with [`io::ErrorKind::NotConnected`] once the session is over —
+    /// whether the pseudoconsole has been closed or the console host of a
+    /// released session has already exited on its own — or with the backend's
+    /// error.
     pub(crate) fn resize(&self, size: Size) -> io::Result<()> {
         let state = self.lock();
         if state.close == CloseState::Done {
@@ -332,7 +334,21 @@ impl ConsoleShared {
         // SAFETY: `hpcon` is live — `close` is not `Done`, and holding the
         // state lock prevents any close from claiming it during the call.
         // `ResizePseudoConsole` is a quick signal write, safe under the lock.
-        unsafe { self.backend.resize(self.hpcon, size) }
+        unsafe { self.backend.resize(self.hpcon, size) }.map_err(|err| {
+            if crate::core::is_disconnect_error(&err) {
+                // In released mode nothing closes the `HPCON` when the session
+                // ends by natural end-of-file, so a resize after that point
+                // reaches a console host that is already gone and fails with a
+                // disconnect-class code (observed: `ERROR_NO_DATA`). Legacy
+                // mode reports the same situation through the `Done` check
+                // above; normalizing here keeps the `NotConnected` contract
+                // identical across Windows versions. The original error stays
+                // available as the source.
+                io::Error::new(io::ErrorKind::NotConnected, err)
+            } else {
+                err
+            }
+        })
     }
 
     /// Returns whether the session is in released mode.

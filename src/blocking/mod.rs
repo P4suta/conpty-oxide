@@ -94,11 +94,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use windows_sys::Win32::Foundation::{
-    ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED,
-};
-
 use crate::backend::{BackendKind, ConPtyBackend};
+use crate::core::is_disconnect_error;
 use crate::core::job::Job;
 use crate::core::pipes::{create_sync_pipes, SyncPipes};
 use crate::core::proc::{self, SpawnedChild};
@@ -587,7 +584,7 @@ impl Read for ConoutReader {
                 Ok(0)
             }
             Ok(read) => Ok(read),
-            Err(err) if is_disconnected(&err) => {
+            Err(err) if is_disconnect_error(&err) => {
                 self.on_eof();
                 Ok(0)
             }
@@ -638,31 +635,6 @@ impl Write for ConinWriter {
         // has consumed everything — a deadlock, not a flush.
         Ok(())
     }
-}
-
-/// Returns whether `err` means "the other end of the pipe is gone", which the
-/// reader reports as end-of-file.
-///
-/// The Rust standard library already maps `ERROR_BROKEN_PIPE` and
-/// `ERROR_HANDLE_EOF` to `Ok(0)`, so in practice this catches the remaining
-/// pipe-teardown codes; listing all four keeps the contract independent of
-/// that implementation detail.
-fn is_disconnected(err: &io::Error) -> bool {
-    const DISCONNECTED: [u32; 4] = [
-        ERROR_BROKEN_PIPE,
-        ERROR_HANDLE_EOF,
-        ERROR_NO_DATA,
-        ERROR_PIPE_NOT_CONNECTED,
-    ];
-
-    let raw_matches = err
-        .raw_os_error()
-        .is_some_and(|code| DISCONNECTED.iter().any(|&known| known as i32 == code));
-    raw_matches
-        || matches!(
-            err.kind(),
-            io::ErrorKind::BrokenPipe | io::ErrorKind::UnexpectedEof
-        )
 }
 
 /// A command to run inside a pseudoconsole.
@@ -1201,6 +1173,53 @@ mod tests {
         assert_eq!(controller.backend_kind(), &BackendKind::System);
     }
 
+    /// Runs a short child in `pty` to completion, then checks the documented
+    /// resize contract for a finished session.
+    ///
+    /// Both lifecycle modes must report the same thing: on a released backend
+    /// the console host is gone but the `HPCON` is still open, so the error is
+    /// the normalized disconnect from the resize FFI; on a legacy backend the
+    /// watcher has closed the pseudoconsole, so it comes from the close-state
+    /// check. Either way the caller must see `NotConnected`.
+    fn assert_resize_after_session_end_is_not_connected(pty: Pty) {
+        let Running {
+            mut child,
+            reader,
+            writer,
+            controller,
+        } = Running::start_in(pty, Command::new("cmd.exe").args(["/c", "exit", "0"]));
+        child.wait().expect("waiting must succeed");
+        // End-of-file proves the session is over (and, on a legacy backend,
+        // that the watcher has already closed the pseudoconsole).
+        reader.join().expect("the reader thread must not panic");
+
+        let err = controller
+            .resize(Size::new(30, 100))
+            .expect_err("resizing a finished session must fail");
+        match err {
+            Error::Resize(source) => {
+                assert_eq!(
+                    source.kind(),
+                    io::ErrorKind::NotConnected,
+                    "a finished session must report NotConnected on every \
+                     backend, got: {source:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        drop(writer);
+    }
+
+    #[test]
+    fn resize_after_the_session_ends_reports_not_connected() {
+        complete_within(
+            "resize_after_the_session_ends_reports_not_connected",
+            || {
+                assert_resize_after_session_end_is_not_connected(pty());
+            },
+        );
+    }
+
     #[test]
     fn echoed_output_reaches_the_reader_and_the_session_ends() {
         complete_within("echoed_output_reaches_the_reader", || {
@@ -1508,29 +1527,5 @@ mod tests {
             drop(writer);
             drop(controller);
         });
-    }
-
-    #[test]
-    fn disconnect_errors_are_end_of_file() {
-        assert!(is_disconnected(&io::Error::from_raw_os_error(
-            ERROR_BROKEN_PIPE as i32
-        )));
-        assert!(is_disconnected(&io::Error::from_raw_os_error(
-            ERROR_HANDLE_EOF as i32
-        )));
-        assert!(is_disconnected(&io::Error::from_raw_os_error(
-            ERROR_NO_DATA as i32
-        )));
-        assert!(is_disconnected(&io::Error::from_raw_os_error(
-            ERROR_PIPE_NOT_CONNECTED as i32
-        )));
-        assert!(is_disconnected(&io::Error::new(
-            io::ErrorKind::BrokenPipe,
-            "synthetic"
-        )));
-        assert!(!is_disconnected(&io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "synthetic"
-        )));
     }
 }
