@@ -1,0 +1,10 @@
+[settings]
+cargo.binstall = true
+
+[tools]
+just = "1.57.0"
+lefthook = "2.1.10"
+"cargo:cargo-nextest" = "0.9.140"
+"cargo:typos-cli" = "1.48.0"
+"cargo:committed" = "1.1.11"
+"cargo:taplo-cli" = "0.10.0"

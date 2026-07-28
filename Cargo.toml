@@ -1,0 +1,40 @@
+[package]
+name = "conpty-oxide"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "Correctness-first Windows ConPTY (pseudoconsole) library with sync and async (tokio) APIs"
+repository = "https://github.com/P4suta/conpty-oxide"
+readme = "README.md"
+keywords = ["conpty", "pty", "pseudoconsole", "windows", "terminal"]
+categories = ["os::windows-apis", "asynchronous"]
+
+[features]
+default = ["blocking"]
+blocking = []
+tokio = ["dep:tokio"]
+tracing = ["dep:tracing"]
+
+[target.'cfg(windows)'.dependencies]
+thiserror = "2"
+tokio = { version = "1", optional = true, features = ["net", "rt", "sync"] }
+tracing = { version = "0.1", optional = true }
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+  "Win32_Foundation",
+  "Win32_System_Console",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+  "Win32_System_JobObjects",
+  "Win32_System_LibraryLoader",
+  "Win32_Storage_FileSystem",
+  "Win32_Security",
+  "Win32_System_IO",
+]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]

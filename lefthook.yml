@@ -1,0 +1,19 @@
+commit-msg:
+  commands:
+    committed:
+      run: committed --commit-file {1}
+
+pre-commit:
+  parallel: true
+  commands:
+    typos:
+      run: typos
+    fmt:
+      run: cargo fmt --all -- --check
+    clippy:
+      run: cargo clippy --all-targets -- -D warnings
+
+pre-push:
+  commands:
+    test:
+      run: cargo test
