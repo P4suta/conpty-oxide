@@ -10,8 +10,12 @@
 //! Async raises the stakes. The destructors run on a runtime thread, and a
 //! blocked destructor there takes the runtime's timer with it, so
 //! `tokio::time::timeout` cannot report the failure: only the process-killing
-//! watchdog can. The last test goes one step further and drops the *runtime*
-//! with a live, flooding session still parked in a task, which is where the
+//! watchdog can. Two arrangements go beyond the drop-order matrix: the
+//! no-intervening-await cases drop the session while the I/O driver has never
+//! polled since the spawn (so the conout OS handle is still pinned by an
+//! in-flight overlapped read — the interleaving where async teardown differs
+//! from blocking teardown), and the last test drops the *runtime* with a
+//! live, flooding session still parked in a task, which is where the
 //! destructors run on Tokio's shutdown path rather than on an ordinary poll.
 
 #![cfg(all(windows, feature = "tokio"))]
@@ -88,6 +92,57 @@ async fn drop_order_completes(build: impl FnOnce() -> Pty, teardown: impl FnOnce
 /// [`drop_order_completes`] under the recoverable timeout.
 async fn case(name: &str, build: impl FnOnce() -> Pty, teardown: impl FnOnce(Pty)) {
     within(name, DEADLINE, drop_order_completes(build, teardown)).await;
+}
+
+/// [`drop_order_completes`] with **no await between the spawn and the drop**.
+///
+/// Every case above parks the runtime in `tokio::time::sleep` while the pipe
+/// fills, which lets the I/O driver retire the overlapped conout read that
+/// mio schedules eagerly at registration; the later drop then closes the
+/// conout OS handle synchronously. This variant blocks the thread with
+/// `std::thread::sleep` instead, so the driver never runs between building
+/// the session and tearing it down, and the drop happens with that read still
+/// in flight — the one interleaving where dropping a Tokio pipe does *not*
+/// close the OS handle before returning. A teardown that treats "reader
+/// dropped" as "read end gone at the OS level" runs `ClosePseudoConsole`
+/// against a still-open, undrained conout pipe; on hosts before Windows 11
+/// 24H2 that close blocks until the read end disappears, which on this
+/// current-thread runtime only the now-blocked thread could make happen — a
+/// permanent deadlock. On 24H2 and later `ClosePseudoConsole` returns
+/// promptly even with the read end open, so on modern machines this case
+/// exercises the interleaving without being able to prove the deadlock
+/// absent: its failure mode is only observable on pre-24H2 CI.
+///
+/// No `within` wrapper here — the runtime's timer is deliberately starved, so
+/// only the process watchdog and the elapsed-time check can report a failure.
+async fn drop_order_completes_unpolled(build: impl FnOnce() -> Pty, teardown: impl FnOnce(Pty)) {
+    let pty = build();
+    let mut child = Command::new("cmd.exe")
+        .raw_arg(FLOOD)
+        .kill_on_drop(true)
+        .spawn(&pty)
+        .expect("spawning must succeed");
+
+    // Starve the runtime — I/O driver included — while the console host
+    // fills the pipe behind the parked read.
+    std::thread::sleep(FILL);
+    assert!(
+        child.try_wait().expect("polling must succeed").is_none(),
+        "the child finished despite nobody reading its output, so the pipe \
+         buffer never filled and this case is not exercising a blocked \
+         console host"
+    );
+
+    let started = Instant::now();
+    teardown(pty);
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < TEARDOWN_BUDGET,
+        "tearing the session down took {elapsed:?}, over the \
+         {TEARDOWN_BUDGET:?} budget"
+    );
+
+    drop(child);
 }
 
 /// Drop order: read half, write half, controller.
@@ -199,6 +254,18 @@ async fn dropping_the_controller_of_a_forced_legacy_session_first_completes() {
         controller_first,
     )
     .await;
+}
+
+#[tokio::test]
+async fn dropping_the_session_with_no_intervening_await_completes() {
+    let _watchdog = watchdog(BUDGET);
+    drop_order_completes_unpolled(pty, drop).await;
+}
+
+#[tokio::test]
+async fn dropping_the_forced_legacy_session_with_no_intervening_await_completes() {
+    let _watchdog = watchdog(BUDGET);
+    drop_order_completes_unpolled(legacy_pty, drop).await;
 }
 
 /// Dropping the runtime with a live, flooding session still parked in a task.

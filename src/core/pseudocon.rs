@@ -45,7 +45,14 @@
 //! 2. **Reader closed** (`notify_reader_closed`): the conout read end is
 //!    gone, so the host's writes fail with a broken pipe instead of blocking;
 //!    the host exits and close returns. This is the documented "close the
-//!    output pipe first" shutdown.
+//!    output pipe first" shutdown. An async front end cannot always deliver
+//!    this proof — dropping a Tokio pipe closes the OS handle only once the
+//!    I/O driver retires its in-flight read — so such sessions are marked
+//!    with [`ConsoleShared::set_reader_close_deferred`] and the final-defense
+//!    [`Drop`] refuses to lean on case 2 for them. The notification-driven
+//!    closes reached from `notify_reader_closed` itself only ever run in
+//!    released mode (a deferred `request_close`), where close is prompt
+//!    regardless of the reader.
 //! 3. **Explicit request with no live reader** (`request_close`): same proof
 //!    as 1/2 depending on the reader state.
 //! 4. **Explicit request with a live reader, legacy mode** (`request_close`
@@ -132,6 +139,9 @@ struct State {
     release_failed: bool,
     reader: ReaderState,
     close: CloseState,
+    /// Whether a `Closed` reader may lag the OS-level close of the conout
+    /// read end; see [`ConsoleShared::set_reader_close_deferred`].
+    reader_close_deferred: bool,
 }
 
 impl State {
@@ -141,6 +151,7 @@ impl State {
             release_failed: false,
             reader: ReaderState::Open,
             close: CloseState::NotRequested,
+            reader_close_deferred: false,
         }
     }
 }
@@ -226,6 +237,24 @@ impl ConsoleShared {
         }
     }
 
+    /// Records that this session's conout read end may still exist at the OS
+    /// level after [`Self::notify_reader_closed`] has been called.
+    ///
+    /// The async front end calls this once per session, right after creation.
+    /// Dropping a Tokio named pipe does not synchronously close the handle
+    /// while an overlapped operation is in flight: the drop only cancels the
+    /// pending read, and the `CloseHandle` runs when the runtime's I/O driver
+    /// retires the cancelled operation. A `Closed` reader therefore proves
+    /// the reader will never read again, but *not* that the conout read end
+    /// is gone at the OS level — so the final-defense [`Drop`] must not use
+    /// "reader closed" as a promptness proof for `ClosePseudoConsole` (see
+    /// there). The blocking front end never calls this: its read end is a
+    /// plain `OwnedHandle` whose drop closes synchronously.
+    #[cfg(feature = "tokio")]
+    pub(crate) fn set_reader_close_deferred(&self) {
+        self.lock().reader_close_deferred = true;
+    }
+
     /// Records that the conout reader observed end-of-file, and performs a
     /// pending close if one was requested.
     ///
@@ -260,7 +289,11 @@ impl ConsoleShared {
     /// Behaviour by state:
     ///
     /// - Reader `Drained`/`Closed`: closes now, on this thread (prompt; see
-    ///   the module docs).
+    ///   the module docs). On a session with a deferred reader close (the
+    ///   async front end), a `Closed` reader's OS handle may briefly outlive
+    ///   the notification, so this can block until the runtime's I/O driver
+    ///   retires the reader's last operation — which the caller contract
+    ///   below already tolerates.
     /// - Reader `Open`, released mode: defers; the reader's own
     ///   end-of-file/close transition finishes the close.
     /// - Reader `Open`, legacy mode: closes now, on this thread, which may
@@ -415,14 +448,18 @@ impl ConsoleShared {
 /// Running at all means every `Arc<ConsoleShared>` is gone, so no wrapper
 /// that could still transition the state exists. Two cases:
 ///
-/// - Reader `Drained`/`Closed`, or released mode: the close is proven prompt
-///   (module docs, cases 1/2; in released mode close never blocks), so run
-///   it inline.
-/// - Reader still `Open` in legacy mode: state claims a conout read end may
-///   exist (e.g. a leaked raw handle, or ends that were dropped without a
-///   notification — with all `Arc`s gone nobody can tell us which), so
-///   `ClosePseudoConsole` could block until that end disappears. Delegate to
-///   a detached short-lived thread and do not join it: a `Drop` must never
+/// - Released mode, reader `Drained`, or reader `Closed` by a synchronous
+///   drop: the close is proven prompt (module docs, cases 1/2; in released
+///   mode close never blocks), so run it inline.
+/// - Reader still `Open` in legacy mode — or `Closed` in legacy mode on a
+///   session whose reader close is *deferred* (the async front end, see
+///   [`ConsoleShared::set_reader_close_deferred`]): state claims a conout
+///   read end may still exist at the OS level (a leaked raw handle, ends
+///   dropped without a notification, or an overlapped read the runtime's I/O
+///   driver has not retired yet), so `ClosePseudoConsole` could block until
+///   that end disappears — and on a current-thread runtime the dropping
+///   thread may be the only one that can make it disappear. Delegate to a
+///   detached short-lived thread and do not join it: a `Drop` must never
 ///   block. If even spawning the thread fails, leak the `HPCON` — a leak is
 ///   reclaimed at process exit, a wedged destructor is not.
 impl Drop for ConsoleShared {
@@ -435,7 +472,9 @@ impl Drop for ConsoleShared {
         }
         state.close = CloseState::Done;
 
-        if state.reader == ReaderState::Open && !state.released {
+        let reader_may_still_exist = state.reader == ReaderState::Open
+            || (state.reader == ReaderState::Closed && state.reader_close_deferred);
+        if reader_may_still_exist && !state.released {
             let backend = self.backend.clone();
             // Send the pointer as an integer: `HPCON` is a raw pointer and
             // deliberately not `Send`; this one crosses threads soundly
@@ -817,6 +856,35 @@ mod tests {
             drop(conin_write);
             drop(conout_read);
         });
+    }
+
+    /// The async reader's teardown shape: the state machine hears "closed"
+    /// while the conout read end is still open at the OS level (`conout_read`
+    /// is deliberately held across the drops below, standing in for an
+    /// overlapped read the runtime's I/O driver has not retired yet). The
+    /// final-defense drop must route the close to the detached closer thread
+    /// instead of running it inline — on a pre-24H2 host an inline close
+    /// could block on the still-open read end, wedging the dropping thread.
+    /// On a modern host both paths are prompt, so here this is a liveness and
+    /// soundness smoke test of the detached routing.
+    #[cfg(feature = "tokio")]
+    #[test]
+    fn deferred_reader_close_drop_completes_with_the_read_end_open() {
+        complete_within_5s(
+            "deferred_reader_close_drop_completes_with_the_read_end_open",
+            || {
+                let (console, conout_read, conin_write) = console_and_user_ends(backend());
+                let shared = Arc::clone(console.shared());
+                shared.set_reader_close_deferred();
+                shared.notify_reader_closed();
+                drop(shared);
+                drop(console);
+                // Only now does the "read end" disappear; the drops above must
+                // not have waited for it.
+                drop(conout_read);
+                drop(conin_write);
+            },
+        );
     }
 
     #[test]

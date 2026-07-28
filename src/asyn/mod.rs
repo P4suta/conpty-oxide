@@ -104,12 +104,14 @@ use std::os::windows::io::{
 };
 use std::path::Path;
 use std::pin::Pin;
+use std::ptr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::windows::named_pipe::NamedPipeServer;
 use tokio::task::JoinHandle;
+use windows_sys::Win32::System::IO::CancelIoEx;
 
 use crate::backend::{BackendKind, ConPtyBackend};
 use crate::core::is_disconnect_error;
@@ -287,6 +289,11 @@ impl PtyBuilder {
         .map_err(Error::CreateConsole)?;
 
         let shared = Arc::clone(console.shared());
+        // An async reader cannot promise that dropping it closes the conout
+        // read end at the OS level (see `ConoutReader`'s `Drop`); telling the
+        // lifecycle core up front keeps it from ever treating "reader closed"
+        // as a promptness proof for `ClosePseudoConsole`.
+        shared.set_reader_close_deferred();
         Ok(Pty {
             reader: ConoutReader::new(conout, shared),
             writer: ConinWriter::new(conin),
@@ -329,10 +336,19 @@ fn register(handle: OwnedHandle) -> io::Result<NamedPipeServer> {
 /// # Teardown
 ///
 /// Dropping a `Pty` retires the read end first, then the write end, then the
-/// pseudoconsole itself, which is the order that keeps `ClosePseudoConsole`
-/// from blocking: with the read end gone the console host's writes fail
-/// instead of waiting for a reader. Dropping never blocks and never leaks the
-/// session, whatever order the halves of a split session are dropped in.
+/// pseudoconsole itself. Dropping never blocks and never leaks the session,
+/// whatever order the halves of a split session are dropped in.
+///
+/// One async-specific caveat: dropping a session's pipes only *initiates*
+/// their OS-level close. An overlapped operation still in flight is
+/// cancelled, and the handle actually closes when the runtime's I/O driver
+/// retires the cancelled operation. The lifecycle machinery accounts for
+/// this — a `ClosePseudoConsole` that cannot be proven prompt runs on a
+/// detached thread, never on the dropping one — but it does mean that on a
+/// backend without `ReleasePseudoConsole` the console host may observe the
+/// session's end only after the I/O driver next runs. Prompt teardown at the
+/// OS level therefore additionally wants a live runtime; the drop itself
+/// never waits for one.
 ///
 /// Because closing the input pipe is part of that teardown, dropping a `Pty`
 /// whose child is still running **terminates the child** — see the module
@@ -546,9 +562,12 @@ impl AsyncWrite for WriteHalf<'_> {
 /// Reaching end-of-file, and dropping this half, are both reported to the
 /// session's lifecycle machinery: they are the events that let
 /// `ClosePseudoConsole` run promptly instead of waiting for a reader that will
-/// never come back. Because that reporting happens in [`Drop`], it is
-/// synchronous and never blocks — the notification only ever performs a close
-/// that has already been proven prompt.
+/// never come back. The reporting happens in [`Drop`] and never blocks: a
+/// close runs inline only where it is proven prompt, and one that cannot be
+/// proven prompt — possible on a backend without `ReleasePseudoConsole`,
+/// because dropping an async pipe closes the OS handle only once the I/O
+/// driver retires its in-flight read — is handed to a detached thread
+/// instead.
 ///
 /// The bytes are a UTF-8 virtual-terminal stream. They arrive in whatever
 /// chunks the console host produced, so a multi-byte character can straddle
@@ -585,9 +604,14 @@ impl AsyncRead for OwnedReadHalf {
 /// written yet. Hold on to this half until the child has exited — or close it
 /// deliberately, as a way to end a session that ignores everything else.
 ///
-/// `AsyncWriteExt::shutdown` is that deliberate close: it closes the input
-/// pipe immediately and never blocks. Writes afterwards fail with
-/// [`io::ErrorKind::BrokenPipe`], and shutting down again is a no-op.
+/// `AsyncWriteExt::shutdown` is that deliberate close: it never blocks, it
+/// cancels a write still in flight rather than flushing it, and it makes
+/// later writes fail with [`io::ErrorKind::BrokenPipe`]; shutting down again
+/// is a no-op. Dropping this half closes the pipe the same way. One caveat:
+/// with an overlapped write in flight, the OS handle closes only once the
+/// runtime's I/O driver has retired the cancelled operation, so the console
+/// host observes the close after the driver's next poll — one poll, not an
+/// unbounded wait for the host to drain the pipe.
 #[derive(Debug)]
 pub struct OwnedWriteHalf {
     writer: ConinWriter,
@@ -742,13 +766,19 @@ impl AsyncRead for ConoutReader {
     }
 }
 
-/// Closes the read end, then tells the lifecycle state machine about it.
+/// Retires the read end, then tells the lifecycle state machine about it.
 ///
-/// The order matters: with the handle already closed, a `ClosePseudoConsole`
-/// triggered by the notification cannot block waiting for this reader — the
-/// console host's writes fail instead. This is the documented "close the
-/// output pipe first" shutdown. Both steps are synchronous, which is what lets
-/// them happen in a destructor at all.
+/// Dropping the Tokio pipe only *initiates* the OS-level close: with a
+/// mio-scheduled overlapped read still in flight — the state of every session
+/// between registration and the I/O driver's next poll after conout activity
+/// — the drop cancels the read, and the `CloseHandle` runs when the driver
+/// retires the cancelled operation, not here. The notification therefore must
+/// not be taken as proof that the conout read end is gone, and the lifecycle
+/// machinery does not take it as one: the session is marked at build time
+/// (`set_reader_close_deferred`), so a `ClosePseudoConsole` that would need
+/// that proof to be prompt is routed to a detached thread instead of running
+/// on this destructor's thread. Both steps below are synchronous and
+/// non-blocking, which is what lets them happen in a destructor at all.
 impl Drop for ConoutReader {
     fn drop(&mut self) {
         drop(self.pipe.take());
@@ -759,7 +789,8 @@ impl Drop for ConoutReader {
 /// The server end of the conin named pipe.
 ///
 /// Nothing but the handle: dropping it — or shutting it down — closes the
-/// pipe, which the console host reads as the terminal going away.
+/// pipe, which the console host reads as the terminal going away. Both go
+/// through [`Self::close_pipe`], which cancels an in-flight write first.
 #[derive(Debug)]
 struct ConinWriter {
     /// `None` once the pipe has been closed by a shutdown.
@@ -779,6 +810,41 @@ impl ConinWriter {
                 "the pseudoconsole input pipe has been shut down",
             )
         })
+    }
+
+    /// Cancels any in-flight overlapped write, then closes the pipe.
+    ///
+    /// mio deliberately lets a pending write run to completion before the
+    /// handle is closed, which is right for data pipes and wrong for conin: a
+    /// conin write goes pending exactly when the console host has stopped
+    /// draining input, and the close *is* the "terminal is gone" signal the
+    /// caller is trying to send — flushing would defer that signal until the
+    /// wedged host reads again, potentially forever. `CancelIoEx` bounds the
+    /// deferral to one poll of the runtime's I/O driver instead: the write
+    /// completes as cancelled, the driver retires it, and the handle closes.
+    /// Idempotent, synchronous, and never blocking.
+    fn close_pipe(&mut self) {
+        let Some(pipe) = self.pipe.take() else {
+            return;
+        };
+        // SAFETY: `pipe` still owns the handle, so it is live for the call; a
+        // null OVERLAPPED requests cancellation of every operation this
+        // process issued on it, which is the intent (conin carries no reads —
+        // mio's eager registration read fails synchronously on an outbound
+        // pipe). Failure needs no handling: `ERROR_NOT_FOUND` just means
+        // nothing was pending, and the drop below closes the handle — or
+        // schedules the close — either way.
+        unsafe { CancelIoEx(pipe.as_raw_handle(), ptr::null()) };
+        drop(pipe);
+    }
+}
+
+/// Dropping the write half is documented to end the session, so the close
+/// must not linger behind an in-flight write either; see
+/// [`ConinWriter::close_pipe`].
+impl Drop for ConinWriter {
+    fn drop(&mut self) {
+        self.close_pipe();
     }
 }
 
@@ -806,8 +872,10 @@ impl AsyncWrite for ConinWriter {
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // Closing the handle is the shutdown: a named pipe has no half-close,
         // and this direction's end-of-file is precisely what tells the console
-        // host that the terminal is gone. Idempotent, and never blocking.
-        drop(self.get_mut().pipe.take());
+        // host that the terminal is gone. Idempotent, and never blocking; a
+        // write still in flight is cancelled rather than flushed (see
+        // `close_pipe`).
+        self.get_mut().close_pipe();
         Poll::Ready(Ok(()))
     }
 }
@@ -1179,6 +1247,55 @@ mod tests {
             Ok(output) => output,
             Err(_) => panic!("`{name}` hung for more than {TEST_TIMEOUT:?}"),
         }
+    }
+
+    /// Kills the test process if the guarded test has not finished within
+    /// [`TEST_TIMEOUT`]; disarmed by its own [`Drop`].
+    ///
+    /// [`complete_within`] cannot report a destructor that blocks: on the
+    /// current-thread runtime `#[tokio::test]` uses, a wedged `Drop` occupies
+    /// the only thread and takes the runtime's timer down with it. The
+    /// teardown-heavy tests below — the ones whose interesting statements are
+    /// bare `drop`s outside any timeout scope — arm this process-killing
+    /// guard instead (the integration harness's watchdog pattern), so a
+    /// future teardown regression fails the `--lib` run rather than hanging
+    /// it forever.
+    struct ProcessWatchdog {
+        finished: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Drop for ProcessWatchdog {
+        fn drop(&mut self) {
+            self.finished
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn process_watchdog(name: &'static str) -> ProcessWatchdog {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let finished = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&finished);
+        std::thread::Builder::new()
+            .name(format!("watchdog-{name}"))
+            .spawn(move || {
+                let deadline = std::time::Instant::now() + TEST_TIMEOUT;
+                while !flag.load(Ordering::SeqCst) {
+                    if std::time::Instant::now() >= deadline {
+                        // 101 is what the harness reports for a failing run,
+                        // so a killed test reads as a failure, not a crash.
+                        eprintln!(
+                            "conpty-oxide: `{name}` did not finish within \
+                             {TEST_TIMEOUT:?}; assuming a wedged destructor \
+                             and killing the test process"
+                        );
+                        std::process::exit(101);
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            })
+            .expect("spawning the watchdog thread must succeed");
+        ProcessWatchdog { finished }
     }
 
     fn pty() -> Pty {
@@ -1758,6 +1875,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_session_without_the_eof_watcher_still_tears_down() {
+        let _watchdog = process_watchdog("a_session_without_the_eof_watcher_still_tears_down");
         let pty = Pty::builder()
             .eof_on_root_exit(false)
             .build()
@@ -1779,6 +1897,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_controller_keeps_an_idle_session_alive() {
+        let _watchdog = process_watchdog("the_controller_keeps_an_idle_session_alive");
         let (reader, writer, controller) = pty().into_split();
         // Retiring both pipe ends does not end the session: nothing has asked
         // for a close, and the controller still owns the console.
@@ -1792,6 +1911,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_the_parts_in_any_order_completes() {
+        let _watchdog = process_watchdog("dropping_the_parts_in_any_order_completes");
         // Controller first, then the write half, then the reader: the
         // pseudoconsole outlives its controller and is closed by the last part
         // standing.
