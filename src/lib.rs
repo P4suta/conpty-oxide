@@ -61,6 +61,13 @@
 // every configuration that has a front end — blocking, async, or both — where
 // an unused item really is a mistake.
 #![cfg_attr(not(any(feature = "blocking", feature = "tokio")), allow(dead_code))]
+// Every public item carries documentation, and this keeps it that way. `warn`
+// rather than `deny` so a half-written local edit still builds; every CI clippy
+// invocation passes `-D warnings`, which promotes this to a hard error there.
+// It lives here rather than in a `[lints.rust]` table so that it applies to the
+// crate under any driver — `cargo rustc`, rustdoc, rust-analyzer — instead of
+// only where Cargo forwards its lint configuration.
+#![warn(missing_docs)]
 
 #[cfg(not(windows))]
 compile_error!(
