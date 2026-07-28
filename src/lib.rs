@@ -19,12 +19,15 @@ compile_error!(
      build it with a `*-pc-windows-*` target."
 );
 
+mod backend;
 // Internal command builder. It is wired into the public blocking / async
 // APIs in a later phase; allow dead code until then.
 #[allow(dead_code)]
 mod command;
+mod core;
 mod error;
 mod size;
 
+pub use backend::{BackendKind, ConPtyBackend};
 pub use error::{BackendError, Error, Result};
 pub use size::Size;
