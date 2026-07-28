@@ -1335,6 +1335,11 @@ mod tests {
     /// this, and a hang is the failure mode being guarded against.
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+    /// `STATUS_CONTROL_C_EXIT`: the code a client reports when its terminal
+    /// goes away, i.e. the crate's documented consequence of closing conin on
+    /// a live session.
+    const STATUS_CONTROL_C_EXIT: u32 = 0xC000_013A;
+
     /// Awaits `f`, failing the test if it has not finished within
     /// [`TEST_TIMEOUT`].
     ///
@@ -2005,18 +2010,19 @@ mod tests {
                 .expect("a repeated shutdown must succeed");
 
             // The console host reads the closed input pipe as the terminal
-            // going away and terminates its clients, so the session reaches
-            // end-of-file with no help from the child.
+            // going away and terminates its clients with the documented code,
+            // so the session reaches end-of-file with no help from the child.
             let mut sink = Vec::new();
             reader
                 .read_to_end(&mut sink)
                 .await
                 .expect("reading to end-of-file must succeed");
             let status = child.wait().await.expect("waiting must succeed");
-            assert!(
-                !status.success(),
-                "a session ended from the input side must not report success, \
-                 got: {status}"
+            assert_eq!(
+                status.code(),
+                STATUS_CONTROL_C_EXIT,
+                "a child whose terminal went away must report \
+                 STATUS_CONTROL_C_EXIT, got: {status}"
             );
             drop(controller);
         })

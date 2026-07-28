@@ -1027,6 +1027,11 @@ mod tests {
     /// this, and a hang is the failure mode being guarded against.
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+    /// `STATUS_CONTROL_C_EXIT`: the code a client reports when its terminal
+    /// goes away, i.e. the crate's documented consequence of closing conin on
+    /// a live session.
+    const STATUS_CONTROL_C_EXIT: u32 = 0xC000_013A;
+
     /// Runs `f` on a helper thread and fails the test if it has not finished
     /// within [`TEST_TIMEOUT`].
     ///
@@ -1632,6 +1637,57 @@ mod tests {
             // session is still open and still resizable.
             pty.resize(Size::new(30, 100))
                 .expect("the session must still be open");
+        });
+    }
+
+    /// The input-side contract the docs state in four places: dropping the
+    /// owned write half of a live session closes conin, the console host
+    /// reads that as the terminal being closed, and the child is terminated
+    /// with `STATUS_CONTROL_C_EXIT` — dropping this half is a way to *stop* a
+    /// session, not to signal end of input.
+    #[test]
+    fn dropping_the_write_half_terminates_the_child() {
+        complete_within("dropping_the_write_half_terminates_the_child", || {
+            const MARKER: &str = "conpty-oxide-conin-drop-marker";
+
+            let pty = pty();
+            let mut child = Command::new("cmd.exe")
+                .spawn(&pty)
+                .expect("spawning must succeed");
+            let (mut reader, mut writer, _controller) = pty.into_split();
+
+            // Closing conin only ends a session that has a client to send
+            // the close event to, so first prove the child is attached and
+            // reading console input: an interactive `cmd.exe` cannot echo
+            // this line before it has done both.
+            writer
+                .write_all(format!("echo {MARKER}\r\n").as_bytes())
+                .expect("writing console input must succeed");
+            let mut seen = String::new();
+            let mut buf = [0u8; 4096];
+            while !seen.contains(MARKER) {
+                let read = reader.read(&mut buf).expect("reading must succeed");
+                assert_ne!(read, 0, "the session ended before the child started");
+                seen.push_str(&String::from_utf8_lossy(&buf[..read]));
+            }
+
+            drop(writer);
+
+            // The console host reads the closed input pipe as the terminal
+            // going away: it terminates its clients with the documented code,
+            // and the session reaches end-of-file with no help from the
+            // child.
+            let mut sink = Vec::new();
+            reader
+                .read_to_end(&mut sink)
+                .expect("reading to end-of-file must succeed");
+            let status = child.wait().expect("waiting must succeed");
+            assert_eq!(
+                status.code(),
+                STATUS_CONTROL_C_EXIT,
+                "a child whose terminal went away must report \
+                 STATUS_CONTROL_C_EXIT, got: {status}"
+            );
         });
     }
 

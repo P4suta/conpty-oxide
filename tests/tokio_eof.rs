@@ -21,7 +21,7 @@
 
 mod helpers;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::AsyncReadExt;
 
@@ -36,6 +36,9 @@ const BUDGET: Duration = Duration::from_secs(40);
 /// Per-test budget; the legacy shutdown path spends about a second draining
 /// before it closes, everything else is milliseconds.
 const DEADLINE: Duration = Duration::from_secs(30);
+
+/// The bound `wait` is expected to respect for a child that exits at once.
+const WAIT_BUDGET: Duration = Duration::from_secs(2);
 
 /// The body of the read-past-exit test, shared by both lifecycle modes.
 async fn reading_past_the_child_exit_reaches_eof_in(pty: Pty) {
@@ -108,6 +111,40 @@ async fn reading_past_the_child_exit_reaches_end_of_file_on_the_forced_legacy_pa
         "reading_past_the_child_exit_reaches_end_of_file_on_the_forced_legacy_path",
         DEADLINE,
         async { reading_past_the_child_exit_reaches_eof_in(legacy_pty()).await },
+    )
+    .await;
+}
+
+/// `Child::wait` must resolve as soon as the child is gone, not after any
+/// part of the session's teardown. The async wait has more machinery than the
+/// blocking one — a `spawn_blocking` hand-off and a stored `JoinHandle` — so
+/// the latency bound from `eof_semantics.rs` is asserted here as well.
+#[tokio::test]
+async fn waiting_for_a_short_child_resolves_promptly() {
+    let _watchdog = watchdog(BUDGET);
+    within(
+        "waiting_for_a_short_child_resolves_promptly",
+        DEADLINE,
+        async {
+            // The output is drained by the session's reader task throughout,
+            // which is the arrangement ConPTY requires; `wait` must then
+            // resolve as soon as the child is gone.
+            let mut session =
+                Session::start(Command::new("cmd.exe").args(["/c", "echo", "prompt"]));
+
+            let started = Instant::now();
+            let status = session.child.wait().await.expect("waiting must succeed");
+            let elapsed = started.elapsed();
+
+            assert!(status.success(), "unexpected status: {status}");
+            assert!(
+                elapsed < WAIT_BUDGET,
+                "waiting for a child that exits immediately took {elapsed:?}, \
+                 which is over the {WAIT_BUDGET:?} budget"
+            );
+
+            session.finish().await;
+        },
     )
     .await;
 }
