@@ -124,7 +124,7 @@ use crate::error::{Error, Result};
 use crate::size::Size;
 use crate::status::ExitStatus;
 
-/// Builder for a [`Pty`].
+/// Builder for an asynchronous [`Pty`].
 ///
 /// Created by [`Pty::builder`]. Every option has a working default, so
 /// `Pty::builder().build()` is a complete 24x80 session on the system backend.
@@ -235,11 +235,15 @@ impl PtyBuilder {
     ///
     /// Called with no runtime in scope, this returns
     /// [`Error::CreateConsole`] wrapping an [`io::ErrorKind::Other`] error
-    /// rather than creating anything. The one misuse it cannot turn into an
-    /// error is a runtime whose I/O driver is disabled
+    /// rather than creating anything.
+    ///
+    /// # Panics
+    ///
+    /// The one misuse that cannot be turned into an error is a runtime whose
+    /// I/O driver is disabled
     /// ([`Builder::enable_io`](tokio::runtime::Builder::enable_io) not
-    /// called): Tokio panics on registration there, exactly as it does for its
-    /// own socket types.
+    /// called): Tokio panics when the pipes are registered there, exactly as
+    /// it does for its own socket types.
     ///
     /// # Errors
     ///
@@ -326,7 +330,8 @@ fn register(handle: OwnedHandle) -> io::Result<NamedPipeServer> {
     unsafe { NamedPipeServer::from_raw_handle(raw) }
 }
 
-/// A pseudoconsole session: the console plus both ends of its I/O.
+/// An asynchronous pseudoconsole session: the console plus both ends of its
+/// I/O.
 ///
 /// `Pty` implements [`AsyncRead`] (rendered console output) and [`AsyncWrite`]
 /// (console input). Because both use `Pin<&mut Self>`, reading and writing
@@ -505,7 +510,7 @@ impl AsyncWrite for Pty {
     }
 }
 
-/// Borrowed read half of a [`Pty`], from [`Pty::split`].
+/// Borrowed read half of an asynchronous [`Pty`], from [`Pty::split`].
 #[derive(Debug)]
 pub struct ReadHalf<'a> {
     reader: &'a mut ConoutReader,
@@ -521,7 +526,7 @@ impl AsyncRead for ReadHalf<'_> {
     }
 }
 
-/// Borrowed write half of a [`Pty`], from [`Pty::split`].
+/// Borrowed write half of an asynchronous [`Pty`], from [`Pty::split`].
 ///
 /// Writing has the same semantics as [`OwnedWriteHalf`], including the fact
 /// that shutting it down ends the session. Dropping this borrow, on the other
@@ -549,7 +554,7 @@ impl AsyncWrite for WriteHalf<'_> {
     }
 }
 
-/// Owned read half of a [`Pty`], from [`Pty::into_split`].
+/// Owned read half of an asynchronous [`Pty`], from [`Pty::into_split`].
 ///
 /// # End-of-file
 ///
@@ -587,7 +592,7 @@ impl AsyncRead for OwnedReadHalf {
     }
 }
 
-/// Owned write half of a [`Pty`], from [`Pty::into_split`].
+/// Owned write half of an asynchronous [`Pty`], from [`Pty::into_split`].
 ///
 /// Bytes written here become console input for the child, exactly as if they
 /// had been typed: line-oriented programs expect `\r\n`, not `\n`.
@@ -635,7 +640,7 @@ impl AsyncWrite for OwnedWriteHalf {
     }
 }
 
-/// Control handle for a split session, from [`Pty::into_split`].
+/// Control handle for a split asynchronous session, from [`Pty::into_split`].
 ///
 /// Holds the pseudoconsole itself, so the session stays usable while the read
 /// and write halves live in other tasks. Dropping it does not end the session:
@@ -880,7 +885,7 @@ impl AsyncWrite for ConinWriter {
     }
 }
 
-/// A command to run inside a pseudoconsole.
+/// A command to run inside an asynchronous pseudoconsole session.
 ///
 /// Mirrors [`std::process::Command`]: the builder methods take `&mut self` and
 /// return `&mut Self`, so a whole invocation can be written as one expression.
@@ -1036,7 +1041,8 @@ impl Command {
     }
 }
 
-/// A running (or finished) root child of a pseudoconsole session.
+/// A running (or finished) root child of an asynchronous pseudoconsole
+/// session.
 ///
 /// The handle owns the session's job object as well as the process handle, so
 /// [`Child::kill`] terminates the whole process tree rather than just the
@@ -1097,6 +1103,12 @@ impl Child {
     /// waits for its blocking tasks to finish, a runtime that shuts down while
     /// a watched child is still running will block until the child exits. Call
     /// [`Child::kill`] first if that is not what you want.
+    ///
+    /// # Panics
+    ///
+    /// Panics when first awaited outside a Tokio runtime: the wait is pushed
+    /// onto the runtime's blocking pool, and `tokio::task::spawn_blocking`
+    /// panics with no runtime in scope.
     ///
     /// # Errors
     ///
