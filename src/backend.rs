@@ -1727,7 +1727,7 @@ mod tests {
     /// the join keeps the working directory's drive, which is the resolution
     /// the OS itself would perform — made once, here, and then pinned.
     #[test]
-    fn a_rooted_driveless_directory_takes_the_working_directorys_drive() {
+    fn a_rooted_driveless_directory_takes_the_working_directory_drive() {
         let resolved = absolute_dir(Path::new("\\conpty-oxide-rooted"))
             .expect("a rooted path must absolutize");
         assert!(resolved.is_absolute(), "unexpected path: {resolved:?}");
