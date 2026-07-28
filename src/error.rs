@@ -136,8 +136,9 @@ pub enum BackendError {
     /// releases, or their versions could not be read.
     ///
     /// The two communicate over a private, versioned protocol and are shipped
-    /// as a pair for that reason; running a mismatched pair crashes the client
-    /// process rather than degrading (wezterm#7774).
+    /// as a pair for that reason; a bad ConPTY bundle crashes the client
+    /// process rather than degrading (wezterm#7774 is such a FailFast, from a
+    /// stale bundle).
     #[error(
         "version mismatch: `{}` reports {dll_version} \
          but its OpenConsole.exe reports {exe_version}",

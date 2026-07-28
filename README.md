@@ -208,10 +208,13 @@ back to the system implementation, logging the rejection under the `tracing`
 feature. A backend can be installed process-wide with `set_global_default` or
 per session with `PtyBuilder::backend`.
 
-> **The two files must be a matched pair.** `conpty.dll` launches
-> `OpenConsole.exe` and speaks a private, versioned protocol to it. A
-> mismatched pair does not degrade: it crashes the client process
-> (wezterm#7774). `from_dir` compares both `ProductVersion` resources and
+> **The two files must be a matched pair — and a current one.** `conpty.dll`
+> launches `OpenConsole.exe` and speaks a private, versioned protocol to it,
+> so a mismatched pair does not degrade: it crashes the client process. A
+> stale pair crashes too — wezterm#7774 is PowerShell FailFasting under a
+> matched but outdated bundle — and version equality cannot detect that, so
+> keep the bundle current.
+> `from_dir` compares both `ProductVersion` resources and
 > refuses a pair it cannot prove consistent — `from_dir_unchecked` opts out of
 > that check and should stay unused unless you can guarantee the pair by other
 > means. The DLL also only looks for its host next to itself and in the

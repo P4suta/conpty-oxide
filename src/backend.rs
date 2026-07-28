@@ -29,10 +29,11 @@
 //! 1. It checks that `conpty.dll` is there at all.
 //! 2. It locates the `OpenConsole.exe` the DLL will launch — next to the DLL,
 //!    or in the architecture subdirectory the DLL itself searches.
-//! 3. It compares the two files' `ProductVersion` resources. A mismatched
-//!    pair is the documented cause of hard crashes (`0x8013_1623` FailFast
-//!    from PowerShell, wezterm#7774), and it is far better to refuse the
-//!    bundle than to take the process down later.
+//! 3. It compares the two files' `ProductVersion` resources. The DLL and the
+//!    console host speak a private, versioned protocol, and a bad ConPTY
+//!    bundle takes the client process down with a FailFast rather than an
+//!    error (wezterm#7774), so it is far better to refuse the bundle than to
+//!    crash later.
 //! 4. It loads the DLL by absolute path with `LoadLibraryExW` and a search
 //!    policy that never consults `PATH`, the current directory, or the
 //!    registry, so a stray `conpty.dll` cannot be planted into the process.
@@ -450,11 +451,17 @@ impl ConPtyBackend {
     /// A bundle is `conpty.dll` plus the `OpenConsole.exe` it launches, as
     /// shipped by the `Microsoft.Windows.Console.ConPTY` NuGet package. Both
     /// must come from the same package: the DLL and the console host share a
-    /// private protocol, and pairing versions that do not match crashes the
-    /// session rather than degrading it (a `0x8013_1623` FailFast from
-    /// PowerShell is the reported symptom, wezterm#7774). This constructor
-    /// therefore refuses a bundle it cannot prove consistent — use
-    /// [`Self::from_dir_unchecked`] to override that.
+    /// private protocol with no compatibility promise across releases, and a
+    /// bad ConPTY bundle crashes the client process rather than degrading —
+    /// wezterm#7774 is PowerShell dying with a `0x8013_1623` FailFast until
+    /// the bundle was replaced. This constructor therefore refuses a pair it
+    /// cannot prove consistent — use [`Self::from_dir_unchecked`] to override
+    /// that.
+    ///
+    /// Note the check's limit: it proves the pair *matches*, not that it is
+    /// current. wezterm#7774's actual configuration was a matched but outdated
+    /// pair, which this validation accepts; keeping the bundled version up to
+    /// date remains the application's responsibility.
     ///
     /// The console host is looked for exactly where `conpty.dll` itself will
     /// look: next to the DLL first, then in the single subdirectory named
@@ -501,9 +508,10 @@ impl ConPtyBackend {
     /// `conpty.dll` and `OpenConsole.exe` communicate over a private, versioned
     /// protocol and are shipped as a pair for that reason. Running a DLL
     /// against a console host from a different release is not a graceful
-    /// degradation: the observed failure mode is a hard crash of the *client*
-    /// process — wezterm#7774 reports PowerShell dying with a `0x8013_1623`
-    /// FailFast — at an arbitrary later point, far from this call.
+    /// degradation: the failure mode of a bad ConPTY bundle is a hard crash of
+    /// the *client* process — in wezterm#7774, PowerShell dies with a
+    /// `0x8013_1623` FailFast — at an arbitrary later point, far from this
+    /// call.
     ///
     /// Use this only when the version resources are unreadable for a reason you
     /// control, for example a locally rebuilt `OpenConsole.exe` that carries no
@@ -1774,10 +1782,11 @@ mod tests {
             (Some("1.22"), Some("1.22.0.0"), true),
             (Some("1.24.1234.0"), Some("1.24.1234.1"), false),
             (Some("1.22.10352.0"), Some("1.24.1234.0"), false),
-            // Two releases of the same minor line, in the real nine-digit
-            // spelling. This is the wezterm#7774 mismatch class, and it must
-            // stay distinguishable — a 16-bit component parse would not.
-            (Some("1.24.260710001"), Some("1.24.250131002"), false),
+            // Two real releases of the same minor line, in the nine-digit
+            // spelling — the pair measured for pitfall 4 in
+            // docs/conpty-pitfalls.md. A 16-bit component parse could not
+            // tell them apart; this one must.
+            (Some("1.24.260710001"), Some("1.24.260303001"), false),
             // An unreadable version is never assumed to match.
             (None, Some("1.24.1234.0"), false),
             (Some("1.24.1234.0"), None, false),

@@ -167,15 +167,26 @@ parks a task on it rather than letting it drop when stdin ends.
 
 ## A bundled DLL and its console host must be a matched pair
 
-**What happens.** An application ships the standalone `conpty.dll` and an
+**What happens.** An application ships the standalone `conpty.dll` with an
 `OpenConsole.exe` from a different release. Sessions do not degrade — the
-client process dies later at an unrelated point. wezterm#7774 reports
-PowerShell taken down by a `0x8013_1623` FailFast.
+client process dies later at an unrelated point, with no error anywhere near
+the two files that caused it.
 
 **Why.** `conpty.dll` does not host the console itself; it launches
-`OpenConsole.exe` and talks to it over a private, versioned protocol. The two
-files are shipped as a pair for that reason, and nothing at load time notices
-that they disagree.
+`OpenConsole.exe` and talks to it over a private, versioned protocol
+(`winconpty.cpp` in microsoft/terminal). The two files are shipped as a pair
+for that reason, and nothing at load time notices that they disagree.
+
+The in-the-wild report usually cited here, wezterm#7774, is worth quoting
+accurately, because it is about the *adjacent* failure: wezterm shipped a
+**matched but outdated** pair (both files `1.22.2502.04002`), PowerShell died
+with a `0x8013_1623` FailFast on exiting a TUI app, and the fix was updating
+both files together to `1.24.260402001`. Two lessons follow. A stale ConPTY
+bundle crashes clients even when it is internally consistent — a
+version-equality check is silent about that, so keeping the bundle current is
+the application's job. And torn pairs are easy to produce by accident: the
+Windows Terminal MSIX ships only `OpenConsole.exe`, while `conpty.dll` comes
+from the separate NuGet package, so a partial update splits the pair.
 
 **Version strings are wider than 16 bits.** The natural way to compare the
 pair is the `ProductVersion` resource of both files, and the natural way to
@@ -189,7 +200,11 @@ exactly the mismatched pairs the check exists to reject.
 **Measured here.** Two real releases of the same minor line —
 `1.24.260710001` and `1.24.260303001` — were compared with both parsers. The
 16-bit parse accepted the cross-release pair; the 64-bit one refuses it with
-`BackendError::VersionMismatch`, which is why the loader parses `u64`.
+`BackendError::VersionMismatch`, which is why the loader parses `u64`. The
+tests `parse_version_reads_the_numeric_prefix` and
+`version_pair_compatibility` in `src/backend.rs` keep both halves true: the
+former pins the nine-digit component parse, the latter pins the refusal of
+exactly this pair.
 
 **In this crate.** `ConPtyBackend::from_dir` validates a bundle before any of
 its code runs: the DLL must exist and be a regular file, the `OpenConsole.exe`
@@ -207,8 +222,11 @@ bundle that is silently ignored is still diagnosable.
 
 **Sources.**
 
-- [wezterm#7774](https://github.com/wez/wezterm/issues/7774) — mismatched pair,
-  `0x8013_1623` FailFast
+- [wezterm#7774](https://github.com/wez/wezterm/issues/7774) — a matched but
+  outdated pair FailFasts PowerShell (`0x8013_1623`), and the MSIX/NuGet
+  packaging split that makes torn pairs likely
+- [`winconpty.cpp`](https://github.com/microsoft/terminal/blob/main/src/winconpty/winconpty.cpp)
+  — the DLL half of the private protocol, and the launch of `OpenConsole.exe`
 - [`Microsoft.Windows.Console.ConPTY`](https://www.nuget.org/packages/Microsoft.Windows.Console.ConPTY)
   — the official MIT-licensed distribution of the pair
 - [`VS_FIXEDFILEINFO`](https://learn.microsoft.com/en-us/windows/win32/api/verrsrc/ns-verrsrc-vs_fixedfileinfo)
@@ -378,11 +396,13 @@ which is why the classic sample works everywhere — but they cannot be
 registered with an I/O completion port, so an async front end cannot use them
 for its own ends.
 
-**In this crate.** `src/core/pipes.rs` builds each direction as a
-single-instance named pipe: the crate keeps the *server* end, opened with
-`FILE_FLAG_OVERLAPPED` and registered with Tokio's I/O driver, and hands
-`CreatePseudoConsole` the *client* end, opened synchronously. New and old hosts
-both see the handle shape they expect. Two details from the named-pipe API are
+**In this crate.** `src/core/pipes.rs` builds the pipes in two shapes, one per
+front end. The blocking front end uses anonymous pipes from `CreatePipe`,
+which are synchronous by construction. The async front end builds each
+direction as a single-instance named pipe: the crate keeps the *server* end,
+opened with `FILE_FLAG_OVERLAPPED` and registered with Tokio's I/O driver, and
+hands `CreatePseudoConsole` the *client* end, opened synchronously. New and
+old hosts both see the handle shape they expect. Two details from the named-pipe API are
 worth repeating because they are easy to get wrong: `ConnectNamedPipe` on an
 overlapped handle must not be passed a null `OVERLAPPED`, and when the client
 connected before the call was issued it fails with `ERROR_PIPE_CONNECTED`,
