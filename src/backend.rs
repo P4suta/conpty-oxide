@@ -65,6 +65,7 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetModuleHandleW, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
     LOAD_LIBRARY_SEARCH_SYSTEM32,
 };
+use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 use crate::error::BackendError;
 use crate::size::Size;
@@ -115,23 +116,14 @@ const PRODUCT_VERSION_KEY: &str = "ProductVersion";
 /// no readable `ProductVersion`.
 const UNKNOWN_VERSION: &str = "unknown";
 
-/// Architecture subdirectories `conpty.dll` searches for its console host,
-/// most preferred first.
+/// `IMAGE_FILE_MACHINE_*` values naming the machine architectures
+/// `conpty.dll` knows a console-host subdirectory for.
 ///
-/// `winconpty`'s `_ConsoleHostPath` looks next to the DLL and then in an
-/// architecture-specific subdirectory, which is how the NuGet package ships
-/// one `conpty.dll` with several `OpenConsole.exe` builds. The native
-/// directory comes first here for the same reason it does there; the others
-/// are still accepted, because a bundle that only carries a cross-architecture
-/// host still works through emulation.
-#[cfg(target_arch = "x86_64")]
-const ARCH_SUBDIRS: &[&str] = &["x64", "arm64", "x86"];
-#[cfg(target_arch = "aarch64")]
-const ARCH_SUBDIRS: &[&str] = &["arm64", "x64", "x86"];
-#[cfg(target_arch = "x86")]
-const ARCH_SUBDIRS: &[&str] = &["x86", "x64", "arm64"];
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "x86")))]
-const ARCH_SUBDIRS: &[&str] = &["x64", "arm64", "x86"];
+/// Defined locally rather than pulled from `windows-sys`: they are the only
+/// things the `Win32_System_SystemInformation` feature would be enabled for.
+const IMAGE_FILE_MACHINE_I386: u16 = 0x014c;
+const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
+const IMAGE_FILE_MACHINE_ARM64: u16 = 0xAA64;
 
 /// Whether `ClearPseudoConsole` may be called on this target at all.
 ///
@@ -170,6 +162,12 @@ type ClearPseudoConsoleFn = unsafe extern "system" fn(HPCON, BOOL) -> HRESULT;
 
 /// An untyped export address, as returned by `GetProcAddress`.
 type ProcAddress = unsafe extern "system" fn() -> isize;
+
+/// `BOOL WINAPI IsWow64Process2(HANDLE, USHORT*, USHORT*)`
+///
+/// Resolved dynamically by [`native_machine`]; see there for why it is not
+/// linked statically.
+type IsWow64Process2Fn = unsafe extern "system" fn(HANDLE, *mut u16, *mut u16) -> BOOL;
 
 /// Resolves a ConPTY entry point from an already-loaded module.
 ///
@@ -458,14 +456,23 @@ impl ConPtyBackend {
     /// therefore refuses a bundle it cannot prove consistent — use
     /// [`Self::from_dir_unchecked`] to override that.
     ///
-    /// The console host is looked for next to the DLL first and then in the
-    /// architecture subdirectory (`x64`, `arm64`, `x86`) that `conpty.dll`
-    /// itself searches, so a NuGet-shaped layout works unchanged.
+    /// The console host is looked for exactly where `conpty.dll` itself will
+    /// look: next to the DLL first, then in the single subdirectory named
+    /// after the machine's *native* architecture (`x64`, `arm64`, or `x86`).
+    /// A host anywhere else — a cross-architecture subdirectory, say — does
+    /// not count, because the DLL never searches there and would silently run
+    /// every session against the operating system's inbox `conhost.exe`
+    /// instead of the file this constructor validated. Placing
+    /// `OpenConsole.exe` next to the DLL, as `scripts/fetch-conpty.ps1` does,
+    /// is the recommended layout.
     ///
     /// A relative `dir` is resolved against the current working directory once,
     /// here. The DLL is then loaded by absolute path with a search policy that
     /// excludes `PATH`, the current directory, the application directory, and
     /// the registry, so nothing but `dir` and `System32` can satisfy the load.
+    /// A *drive-relative* `dir` (`C:dir`) is rejected as
+    /// [`BackendError::DllNotFound`]: it names a path relative to that drive's
+    /// own current directory, which cannot be resolved once and pinned.
     ///
     /// # Errors
     ///
@@ -961,32 +968,119 @@ fn log_bundle_rejected(dir: &Path, err: &BackendError) {
 /// the current directory can decide which `conpty.dll` is loaded. Resolving a
 /// relative `dir` here — once, explicitly — keeps that guarantee while still
 /// accepting the relative paths callers naturally write.
+///
+/// One Windows path form survives the join without becoming absolute: a
+/// drive-relative path (`C:dir`), which [`Path::join`] replaces the base with
+/// wholesale because it carries a drive prefix. Handing it on would make
+/// `LoadLibraryExW` resolve it against that drive's *own* current directory —
+/// mutable process state, and a current-directory-dependent load even under
+/// the strictest search flags — so it is rejected instead of guessed at.
 fn absolute_dir(dir: &Path) -> io::Result<PathBuf> {
-    if dir.is_absolute() {
-        Ok(dir.to_path_buf())
+    let dir = if dir.is_absolute() {
+        dir.to_path_buf()
     } else {
-        Ok(env::current_dir()?.join(dir))
+        env::current_dir()?.join(dir)
+    };
+
+    if !dir.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a drive-relative path resolves against that drive's current \
+             directory, which this loader refuses to depend on",
+        ));
     }
+
+    Ok(dir)
 }
 
 /// Locates the `OpenConsole.exe` a `conpty.dll` in `dir` would launch.
 ///
-/// Mirrors `winconpty`'s own `_ConsoleHostPath`: next to the DLL first, then
-/// the architecture subdirectory. The operating system's inbox `conhost.exe`,
-/// which `conpty.dll` falls back to, is deliberately *not* accepted — the whole
-/// point of a bundle is to run its own console host, and silently using the
-/// inbox one would hand back a backend with the very behaviour the caller was
-/// trying to replace.
+/// Mirrors `winconpty`'s own `_ConsoleHostPath` exactly: next to the DLL
+/// first, then the *single* subdirectory named after the machine's native
+/// architecture. The DLL searches no other subdirectory, so a host anywhere
+/// else must not validate the bundle — the DLL would never launch it, every
+/// session would silently run against the operating system's inbox
+/// `conhost.exe`, and the version-pair check would have proven a file that
+/// never executes. The inbox `conhost.exe` fallback itself is deliberately
+/// *not* accepted either — the whole point of a bundle is to run its own
+/// console host, and silently using the inbox one would hand back a backend
+/// with the very behaviour the caller was trying to replace.
 fn find_console_host(dir: &Path) -> Option<PathBuf> {
     let adjacent = dir.join(OPEN_CONSOLE_EXE);
     if adjacent.is_file() {
         return Some(adjacent);
     }
 
-    ARCH_SUBDIRS
-        .iter()
-        .map(|arch| dir.join(arch).join(OPEN_CONSOLE_EXE))
-        .find(|candidate| candidate.is_file())
+    let candidate = dir.join(native_arch_subdir()?).join(OPEN_CONSOLE_EXE);
+    candidate.is_file().then_some(candidate)
+}
+
+/// Names the architecture subdirectory `conpty.dll` searches for its console
+/// host on this machine, or [`None`] when the native machine is not one the
+/// DLL has a name for.
+///
+/// `winconpty`'s `_ConsoleHostPath` selects the subdirectory from the *native*
+/// machine reported by `IsWow64Process2`, not from the process's own
+/// architecture. An emulated process — an x64 build on ARM64 Windows, say —
+/// has to come to the same answer the DLL will, or it would validate a host in
+/// `x64/` while the DLL searches `arm64/`.
+fn native_arch_subdir() -> Option<&'static str> {
+    match native_machine() {
+        IMAGE_FILE_MACHINE_AMD64 => Some("x64"),
+        IMAGE_FILE_MACHINE_ARM64 => Some("arm64"),
+        IMAGE_FILE_MACHINE_I386 => Some("x86"),
+        _ => None,
+    }
+}
+
+/// Reports the machine's native architecture as an `IMAGE_FILE_MACHINE_*`
+/// value.
+///
+/// `IsWow64Process2` is resolved dynamically because it only exists since
+/// Windows 10 1709, and importing it statically would make the executable fail
+/// to load on older versions — the unhelpful loader error this module
+/// dynamically resolves everything to avoid. Where the export is missing, the
+/// compile-time architecture is the answer: the emulation pairings in which
+/// the two differ (x64 or ARM32 guests on ARM64 hosts) are all newer than the
+/// export.
+fn native_machine() -> u16 {
+    #[cfg(target_arch = "x86_64")]
+    const COMPILED_FOR: u16 = IMAGE_FILE_MACHINE_AMD64;
+    #[cfg(target_arch = "aarch64")]
+    const COMPILED_FOR: u16 = IMAGE_FILE_MACHINE_ARM64;
+    #[cfg(target_arch = "x86")]
+    const COMPILED_FOR: u16 = IMAGE_FILE_MACHINE_I386;
+    // `IMAGE_FILE_MACHINE_UNKNOWN`: no subdirectory gets searched.
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "x86")))]
+    const COMPILED_FOR: u16 = 0;
+
+    let module_name: Vec<u16> = "kernel32.dll".encode_utf16().chain(iter::once(0)).collect();
+    // SAFETY: `module_name` is a NUL-terminated UTF-16 string that outlives
+    // the call.
+    let module = unsafe { GetModuleHandleW(module_name.as_ptr()) };
+    if module.is_null() {
+        return COMPILED_FOR;
+    }
+
+    // SAFETY: `module` is kernel32.dll, which stays loaded for the lifetime of
+    // the process, and the symbol name is a NUL-terminated byte string.
+    let Some(address) = (unsafe { GetProcAddress(module, b"IsWow64Process2\0".as_ptr()) }) else {
+        return COMPILED_FOR;
+    };
+    // SAFETY: kernel32's `IsWow64Process2` has the documented signature the
+    // alias mirrors, and the module stays loaded for the address's lifetime.
+    let is_wow64_process2 = unsafe { mem::transmute::<ProcAddress, IsWow64Process2Fn>(address) };
+
+    let mut process_machine = 0_u16;
+    let mut native = 0_u16;
+    // SAFETY: `GetCurrentProcess` returns a pseudo-handle that is always
+    // valid, and both out-parameters point at live `u16`s.
+    let ok = unsafe { is_wow64_process2(GetCurrentProcess(), &mut process_machine, &mut native) };
+    if ok == 0 {
+        return COMPILED_FOR;
+    }
+
+    native
 }
 
 /// Fails unless `dll` and `host` report the same `ProductVersion`.
@@ -1020,25 +1114,31 @@ fn versions_are_compatible(dll: Option<&str>, host: Option<&str>) -> bool {
 
 /// Parses a `ProductVersion` string into its numeric components.
 ///
-/// Version resources spell the product version as up to four dot-separated
-/// 16-bit numbers (`1.24.1234.0`), sometimes with fewer components and
-/// sometimes with a trailing label (`1.24.1234.0-preview`). Parsing stops at
-/// the first component that is not a plain number and pads the rest with
-/// zeroes, so `1.22` and `1.22.0.0` compare equal — which is what a human
-/// reading those two strings would expect.
+/// The string is up to four dot-separated decimal numbers (`1.24.1234.0`),
+/// sometimes with fewer components and sometimes with a trailing label
+/// (`1.24.1234.0-preview`). The components are parsed as `u64` — *not* the
+/// 16 bits the binary `VS_FIXEDFILEINFO` fields are limited to — because the
+/// string is free-form and microsoft/terminal actually uses it that way: its
+/// ConPTY releases stamp a nine-digit date-serial build component
+/// (`1.24.260710001`), and a 16-bit parse would overflow there, silently stop,
+/// and reduce the pair check to major.minor — accepting exactly the mismatched
+/// bundles it exists to reject. Parsing stops at the first component that is
+/// not a plain number and pads the rest with zeroes, so `1.22` and `1.22.0.0`
+/// compare equal — which is what a human reading those two strings would
+/// expect.
 ///
 /// Returns [`None`] when not even the first component is a number, i.e. when
 /// the string is not a version at all.
-fn parse_version(text: &str) -> Option<[u16; 4]> {
+fn parse_version(text: &str) -> Option<[u64; 4]> {
     let text = text.trim_matches(|c: char| c == '\0' || c.is_whitespace());
 
-    let mut parts = [0u16; 4];
+    let mut parts = [0u64; 4];
     let mut seen = 0;
     for field in text.split('.') {
         if seen == parts.len() {
             break;
         }
-        let Ok(value) = field.trim().parse::<u16>() else {
+        let Ok(value) = field.trim().parse::<u64>() else {
             break;
         };
         parts[seen] = value;
@@ -1459,14 +1559,16 @@ mod tests {
         );
     }
 
-    /// The console host may live in the architecture subdirectory the DLL
-    /// itself searches. Getting past `OpenConsoleMissing` to the version check
-    /// is what proves the subdirectory was consulted.
+    /// The console host may live in the native-architecture subdirectory the
+    /// DLL itself searches. Getting past `OpenConsoleMissing` to the version
+    /// check is what proves the subdirectory was consulted.
     #[test]
-    fn from_dir_finds_the_console_host_in_an_architecture_subdirectory() {
+    fn from_dir_finds_the_console_host_in_the_native_architecture_subdirectory() {
+        let Some(arch) = native_arch_subdir() else {
+            return;
+        };
         let temp = TempDir::new("arch-subdir");
         temp.touch(CONPTY_DLL);
-        let arch = ARCH_SUBDIRS[0];
         temp.touch(&format!("{arch}/{OPEN_CONSOLE_EXE}"));
 
         let err = ConPtyBackend::from_dir(temp.path())
@@ -1484,11 +1586,49 @@ mod tests {
         }
     }
 
+    /// A host that sits only in a subdirectory the DLL never searches must not
+    /// validate the bundle. `winconpty`'s `_ConsoleHostPath` consults the one
+    /// native-architecture subdirectory and then silently falls back to the
+    /// inbox `conhost.exe`, so accepting such a layout would prove a file that
+    /// is never launched while every session runs against an unvalidated host.
+    #[test]
+    fn a_console_host_in_a_non_native_subdirectory_is_not_accepted() {
+        let temp = TempDir::new("wrong-arch");
+        temp.touch(CONPTY_DLL);
+        let native = native_arch_subdir();
+        for arch in ["x64", "arm64", "x86"] {
+            if Some(arch) != native {
+                temp.touch(&format!("{arch}/{OPEN_CONSOLE_EXE}"));
+            }
+        }
+
+        assert_eq!(find_console_host(temp.path()), None);
+
+        let err = ConPtyBackend::from_dir(temp.path())
+            .expect_err("a host the DLL would never launch must not validate the bundle");
+        assert!(
+            matches!(err, BackendError::OpenConsoleMissing { .. }),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    /// Every machine this suite runs on is one of the three architectures the
+    /// DLL knows a subdirectory for, so the runtime probe must name one — a
+    /// [`None`] here would mean `IsWow64Process2` failed *and* the
+    /// compile-time fallback vanished.
+    #[test]
+    fn the_native_arch_subdirectory_is_known_on_this_machine() {
+        let subdir = native_arch_subdir().expect("test machines have a known architecture");
+        assert!(["x64", "arm64", "x86"].contains(&subdir), "{subdir}");
+    }
+
     #[test]
     fn console_host_search_prefers_the_dll_directory() {
         let temp = TempDir::new("host-order");
         let adjacent = temp.touch(OPEN_CONSOLE_EXE);
-        temp.touch(&format!("{}/{OPEN_CONSOLE_EXE}", ARCH_SUBDIRS[0]));
+        if let Some(arch) = native_arch_subdir() {
+            temp.touch(&format!("{arch}/{OPEN_CONSOLE_EXE}"));
+        }
 
         assert_eq!(find_console_host(temp.path()), Some(adjacent));
     }
@@ -1559,11 +1699,53 @@ mod tests {
         }
     }
 
+    /// `C:dir` is relative to the C: drive's *own* current directory, which
+    /// `Path::join` cannot resolve — it replaces the base outright when the
+    /// argument carries a drive prefix — and which `LoadLibraryExW` would
+    /// resolve against mutable per-drive state even under the strict search
+    /// flags. The only current-directory-independent answer is to refuse.
+    #[test]
+    fn a_drive_relative_directory_is_rejected() {
+        let drive_relative = Path::new("C:conpty-oxide-drive-relative");
+
+        let err = absolute_dir(drive_relative)
+            .expect_err("a drive-relative path must not survive absolutization");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        let err = ConPtyBackend::from_dir(drive_relative)
+            .expect_err("a drive-relative directory must be rejected");
+        match err {
+            BackendError::DllNotFound { dir, source } => {
+                assert_eq!(dir, drive_relative);
+                assert_eq!(source.kind(), io::ErrorKind::InvalidInput);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    /// The other prefix-less form, a rooted path (`\dir`), *does* absolutize:
+    /// the join keeps the working directory's drive, which is the resolution
+    /// the OS itself would perform — made once, here, and then pinned.
+    #[test]
+    fn a_rooted_driveless_directory_takes_the_working_directorys_drive() {
+        let resolved = absolute_dir(Path::new("\\conpty-oxide-rooted"))
+            .expect("a rooted path must absolutize");
+        assert!(resolved.is_absolute(), "unexpected path: {resolved:?}");
+        assert!(
+            resolved.ends_with("conpty-oxide-rooted"),
+            "unexpected path: {resolved:?}"
+        );
+    }
+
     #[test]
     fn parse_version_reads_the_numeric_prefix() {
-        let cases: [(&str, Option<[u16; 4]>); 10] = [
+        let cases: [(&str, Option<[u64; 4]>); 11] = [
             ("1.24.1234.0", Some([1, 24, 1234, 0])),
             ("1.22.10352.0", Some([1, 22, 10352, 0])),
+            // The format microsoft/terminal's ConPTY packages really use: the
+            // build component is a nine-digit date serial, far beyond `u16`.
+            // A parse that stopped there would compare major.minor only.
+            ("1.24.260710001", Some([1, 24, 260_710_001, 0])),
             // Missing components are zeroes, so `1.22` == `1.22.0.0`.
             ("1.22", Some([1, 22, 0, 0])),
             ("3", Some([3, 0, 0, 0])),
@@ -1585,12 +1767,17 @@ mod tests {
 
     #[test]
     fn version_pair_compatibility() {
-        let cases: [(Option<&str>, Option<&str>, bool); 8] = [
+        let cases: [(Option<&str>, Option<&str>, bool); 10] = [
             (Some("1.24.1234.0"), Some("1.24.1234.0"), true),
+            (Some("1.24.260710001"), Some("1.24.260710001"), true),
             // Equal after padding: the same release, spelled two ways.
             (Some("1.22"), Some("1.22.0.0"), true),
             (Some("1.24.1234.0"), Some("1.24.1234.1"), false),
             (Some("1.22.10352.0"), Some("1.24.1234.0"), false),
+            // Two releases of the same minor line, in the real nine-digit
+            // spelling. This is the wezterm#7774 mismatch class, and it must
+            // stay distinguishable — a 16-bit component parse would not.
+            (Some("1.24.260710001"), Some("1.24.250131002"), false),
             // An unreadable version is never assumed to match.
             (None, Some("1.24.1234.0"), false),
             (Some("1.24.1234.0"), None, false),
