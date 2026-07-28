@@ -34,7 +34,16 @@
     doc = "form: a [`Pty`] implements `AsyncRead`/`AsyncWrite`, [`Child::wait`] is a",
     doc = "future, and the same rules apply to tasks instead of threads. The two",
     doc = "front ends are independent — their types do not mix — and either can be",
-    doc = "compiled out.",
+    doc = "compiled out. The [`asyn`] module documentation states the async",
+    doc = "lifecycle rules in full.",
+    doc = ""
+)]
+#![cfg_attr(
+    not(feature = "tokio"),
+    doc = "The `tokio` feature — not enabled in this build of the documentation —",
+    doc = "puts the same API at the crate root in asynchronous form: a `Pty` that",
+    doc = "implements `AsyncRead`/`AsyncWrite`, a `Child` whose `wait` is a future,",
+    doc = "and an `asyn` module stating the async lifecycle rules in full.",
     doc = ""
 )]
 //! # Choosing a ConPTY implementation
@@ -61,6 +70,11 @@
 // every configuration that has a front end — blocking, async, or both — where
 // an unused item really is a mistake.
 #![cfg_attr(not(any(feature = "blocking", feature = "tokio")), allow(dead_code))]
+// docs.rs passes `--cfg docsrs` (see `[package.metadata.docs.rs]`), which
+// turns on the nightly-only `doc_auto_cfg` feature: every feature-gated item
+// then carries an "Available on crate feature … only" badge. Stable builds
+// never see the cfg, so this is inert everywhere else.
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 // Every public item carries documentation, and this keeps it that way. `warn`
 // rather than `deny` so a half-written local edit still builds; every CI clippy
 // invocation passes `-D warnings`, which promotes this to a hard error there.
@@ -85,12 +99,13 @@ mod status;
 #[cfg(feature = "blocking")]
 pub mod blocking;
 
-// Spelled `asyn` because `async` is a keyword. The module itself is private:
-// its types are the crate's async API and live at the root, so that
-// `conpty_oxide::Pty` is the async session and `conpty_oxide::blocking::Pty`
-// the synchronous one.
+// Spelled `asyn` because `async` is a keyword. The module is public for the
+// sake of its documentation — the async lifecycle rules and the async example
+// live there, and the type docs refer to them — while its types are also
+// re-exported at the root, so that `conpty_oxide::Pty` is the async session
+// and `conpty_oxide::blocking::Pty` the synchronous one.
 #[cfg(feature = "tokio")]
-mod asyn;
+pub mod asyn;
 
 #[cfg(feature = "tokio")]
 pub use asyn::{

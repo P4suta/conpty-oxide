@@ -244,7 +244,7 @@ The minimum supported Rust version is **1.75**, verified in CI.
   failure modes this crate is built around: what goes wrong, why, how it is
   handled here, and the primary source for each.
 - API documentation: `cargo doc --all-features --open`. The module docs of
-  `blocking` and the crate root state the lifecycle rules in full.
+  `blocking` and `asyn` state the lifecycle rules in full.
 
 ## Roadmap
 
