@@ -19,6 +19,10 @@ compile_error!(
      build it with a `*-pc-windows-*` target."
 );
 
+// Internal command builder. It is wired into the public blocking / async
+// APIs in a later phase; allow dead code until then.
+#[allow(dead_code)]
+mod command;
 mod error;
 mod size;
 
