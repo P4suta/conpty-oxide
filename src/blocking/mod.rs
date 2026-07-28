@@ -1052,6 +1052,24 @@ mod tests {
         Pty::builder().build().expect("building a pty must succeed")
     }
 
+    /// A session forced onto the legacy shutdown path, whatever the OS.
+    ///
+    /// On machines whose ConPTY exports `ReleasePseudoConsole` (Windows 11
+    /// 24H2 and later), every ordinary session in this module runs in released
+    /// mode and `Command::spawn` never arms the legacy watcher. Stripping the
+    /// export from the backend makes the spawn path take the watcher route for
+    /// real, so its regressions fail here instead of only on pre-24H2 CI.
+    fn legacy_pty() -> Pty {
+        let backend = ConPtyBackend::system()
+            .expect("ConPTY must be available")
+            .without_release();
+        assert!(!backend.supports_release());
+        Pty::builder()
+            .backend(backend)
+            .build()
+            .expect("building a forced-legacy pty must succeed")
+    }
+
     /// A session under test: a running child, a thread draining its output,
     /// and the two halves that must stay alive while it runs.
     ///
@@ -1218,6 +1236,39 @@ mod tests {
                 assert_resize_after_session_end_is_not_connected(pty());
             },
         );
+    }
+
+    #[test]
+    fn forced_legacy_resize_after_the_session_ends_reports_not_connected() {
+        complete_within(
+            "forced_legacy_resize_after_the_session_ends_reports_not_connected",
+            || {
+                assert_resize_after_session_end_is_not_connected(legacy_pty());
+            },
+        );
+    }
+
+    #[test]
+    fn a_forced_legacy_session_reaches_end_of_file() {
+        complete_within("a_forced_legacy_session_reaches_end_of_file", || {
+            const MARKER: &str = "conpty-oxide-forced-legacy-marker";
+            let (output, status) = Running::start_in(
+                legacy_pty(),
+                Command::new("cmd.exe").args(["/c", "echo", MARKER]),
+            )
+            .finish();
+            // `finish` joining the reader is the real assertion: the session
+            // was never released, so only the legacy watcher's close can
+            // produce the end-of-file the reader thread waits for. A
+            // regression in arming the watcher (handle duplication, grace
+            // handling, the release/legacy decision) hangs here and is killed
+            // by the watchdog instead of passing silently on a 24H2 machine.
+            assert!(
+                output.contains(MARKER),
+                "marker missing from the rendered output: {output:?}"
+            );
+            assert!(status.success(), "unexpected status: {status}");
+        });
     }
 
     #[test]

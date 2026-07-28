@@ -43,7 +43,20 @@ jobs:
       matrix:
         os: [windows-2022, windows-latest]
         rust: [stable, "1.75"]
+        # Pin which ConPTY lifecycle mode each leg is expected to exercise:
+        # Server 2022 predates ReleasePseudoConsole (legacy shutdown path),
+        # windows-latest (Server 2025, build 26100+) exports it (released
+        # path). The suite asserts this via CONPTY_OXIDE_EXPECT_RELEASE, so a
+        # matrix or runner-image change that silently drops one mode's
+        # coverage fails loudly instead.
+        include:
+          - os: windows-2022
+            expect_release: "0"
+          - os: windows-latest
+            expect_release: "1"
     runs-on: ${{ matrix.os }}
+    env:
+      CONPTY_OXIDE_EXPECT_RELEASE: ${{ matrix.expect_release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1

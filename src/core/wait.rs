@@ -191,9 +191,11 @@ pub(crate) fn spawn_legacy_watcher(
 mod tests {
     use super::*;
 
+    use std::fs::File;
+    use std::io::Read;
     use std::os::windows::io::AsHandle;
     use std::process::{Child, Command, Stdio};
-    use std::time::Instant;
+    use std::sync::mpsc;
 
     use crate::backend::ConPtyBackend;
     use crate::core::pipes::create_sync_pipes;
@@ -291,17 +293,37 @@ mod tests {
         )
         .expect("spawning the watcher must succeed");
 
-        // The reader (conout_read) stays open the whole time: the watcher
-        // must close from its own thread regardless.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !shared.is_closed() {
-            assert!(
-                Instant::now() < deadline,
-                "the watcher must close the console within 5 seconds"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
+        // Drain conout on its own thread and treat *its* end-of-file as the
+        // pass condition. Polling `is_closed` alone would not do: the state
+        // flips to `Done` before the `ClosePseudoConsole` FFI call runs, so
+        // it only proves the watcher *requested* a close. End-of-file, by
+        // contrast, can only come from the console host exiting — that is,
+        // from the close actually completing — so a regression that wedges
+        // the close inside the watcher thread times out here instead of
+        // passing. The live reader also makes this the watcher's hardest
+        // configuration: it must close from its own thread, with the conout
+        // read end still open, and (on a real pre-24H2 host) block until this
+        // reader has drained.
+        let (eof_tx, eof_rx) = mpsc::channel();
+        let reader = thread::Builder::new()
+            .name("test-conout-reader".into())
+            .spawn(move || {
+                let mut conout = File::from(pipes.conout_read);
+                let mut sink = Vec::new();
+                // A broken pipe reads as end-of-file, so this returns once
+                // the console host is gone.
+                let _ = conout.read_to_end(&mut sink);
+                let _ = eof_tx.send(());
+            })
+            .expect("spawning the reader thread must succeed");
 
+        eof_rx.recv_timeout(Duration::from_secs(5)).expect(
+            "the watcher must complete the close — observed as conout \
+             end-of-file — within 5 seconds",
+        );
+        assert!(shared.is_closed());
+
+        reader.join().expect("the reader thread must not panic");
         child.wait().expect("reaping via std must succeed");
         drop(console);
     }

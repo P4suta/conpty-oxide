@@ -299,6 +299,34 @@ impl ConPtyBackend {
         self.inner.api.release.is_some()
     }
 
+    /// Returns a clone of this backend with the `ReleasePseudoConsole` export
+    /// removed.
+    ///
+    /// Sessions on the returned backend behave exactly as on a Windows version
+    /// that predates the export (everything before Windows 11 24H2):
+    /// [`Self::supports_release`] answers `false`, releasing after spawn is
+    /// impossible, and end-of-file has to be forced by the legacy watcher.
+    ///
+    /// This is a test hook, hidden because it is not part of the supported API
+    /// surface. It exists so this crate's own suite — and any downstream
+    /// harness — can exercise the legacy shutdown path deterministically on
+    /// machines whose operating system does export `ReleasePseudoConsole`,
+    /// where every ordinary session runs in released mode and the legacy code
+    /// paths would otherwise be unreachable through the public API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn without_release(&self) -> Self {
+        Self {
+            inner: Arc::new(BackendInner {
+                kind: self.inner.kind.clone(),
+                api: ConptyApi {
+                    release: None,
+                    ..self.inner.api
+                },
+            }),
+        }
+    }
+
     /// Installs this backend as the process-wide default.
     ///
     /// Pseudoconsoles created without an explicit backend use it. The first
@@ -517,6 +545,50 @@ mod tests {
         // The value is OS dependent (Windows 11 24H2 / build 26100 and later
         // export `ReleasePseudoConsole`), so only the query is asserted.
         let _: bool = backend.supports_release();
+    }
+
+    #[test]
+    fn without_release_drops_only_the_release_export() {
+        let backend = ConPtyBackend::system().expect("ConPTY must be available");
+        let legacy = backend.without_release();
+        assert!(
+            !legacy.supports_release(),
+            "the forced-legacy clone must not report a release export"
+        );
+        assert_eq!(legacy.kind(), backend.kind());
+        // The original backend is untouched by the stripped clone.
+        assert_eq!(
+            backend.supports_release(),
+            ConPtyBackend::system()
+                .expect("ConPTY must be available")
+                .supports_release()
+        );
+    }
+
+    /// CI pins `CONPTY_OXIDE_EXPECT_RELEASE` per matrix leg (`0` on the
+    /// Server 2022 leg, `1` on the 24H2+ leg) precisely so the release/legacy
+    /// coverage split cannot rot silently: if the runner images or the matrix
+    /// change, this test fails instead of one lifecycle mode simply never
+    /// running anywhere. Without the variable (a developer machine), the test
+    /// is a no-op.
+    #[test]
+    fn release_support_matches_the_ci_expectation() {
+        let Ok(expected) = std::env::var("CONPTY_OXIDE_EXPECT_RELEASE") else {
+            return;
+        };
+        let expected = match expected.as_str() {
+            "0" => false,
+            "1" => true,
+            other => panic!(r#"CONPTY_OXIDE_EXPECT_RELEASE must be "0" or "1", got {other:?}"#),
+        };
+        let backend = ConPtyBackend::system().expect("ConPTY must be available");
+        assert_eq!(
+            backend.supports_release(),
+            expected,
+            "this machine's ReleasePseudoConsole support does not match what \
+             the CI matrix leg expects, so tests no longer cover the \
+             lifecycle mode this leg is supposed to cover"
+        );
     }
 
     #[test]

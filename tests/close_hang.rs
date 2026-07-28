@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use conpty_oxide::blocking::{Command, Pty};
 
-use helpers::{pty, wait_until, with_timeout};
+use helpers::{legacy_pty, pty, wait_until, with_timeout};
 
 /// Roughly 280 KiB of console output, well past any pipe buffer.
 ///
@@ -36,11 +36,17 @@ const FILL: Duration = Duration::from_millis(500);
 /// What "prompt" means for the teardown itself.
 const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 
-/// Runs one drop-order case: flood the session, read nothing, then hand the
-/// `Pty` to `teardown` and require it to finish quickly.
-fn drop_order_completes(teardown: impl FnOnce(Pty)) {
+/// Runs one drop-order case: flood the session built by `build`, read
+/// nothing, then hand the `Pty` to `teardown` and require it to finish
+/// quickly.
+///
+/// Every case runs twice — once on the machine's natural lifecycle mode and
+/// once on a forced-legacy session — because the two modes tear down through
+/// different code paths (a released session's close never blocks; a legacy
+/// one relies on the drop order having retired the reader first).
+fn drop_order_completes(build: impl FnOnce() -> Pty, teardown: impl FnOnce(Pty)) {
     with_timeout(BUDGET, || {
-        let pty = pty();
+        let pty = build();
         // `kill_on_drop` is cleanup, not part of the scenario: the child is
         // dropped only after the session is gone, so the tree cannot outlive
         // the test even though the pseudoconsole it was attached to is dead.
@@ -76,40 +82,70 @@ fn drop_order_completes(teardown: impl FnOnce(Pty)) {
     });
 }
 
+/// Drop order: read half, write half, controller.
+fn read_half_first(pty: Pty) {
+    let (reader, writer, controller) = pty.into_split();
+    drop(reader);
+    drop(writer);
+    drop(controller);
+}
+
+/// Drop order: controller, write half, read half.
+///
+/// The awkward order: the controller owns the pseudoconsole, so this drops it
+/// while a live read half is still registered and the console host is blocked
+/// writing.
+fn controller_first(pty: Pty) {
+    let (reader, writer, controller) = pty.into_split();
+    drop(controller);
+    drop(writer);
+    drop(reader);
+}
+
+/// Drop order: write half, controller, read half.
+fn write_half_first(pty: Pty) {
+    let (reader, writer, controller) = pty.into_split();
+    drop(writer);
+    drop(controller);
+    drop(reader);
+}
+
 #[test]
 fn dropping_the_whole_session_completes() {
-    drop_order_completes(drop);
+    drop_order_completes(pty, drop);
 }
 
 #[test]
 fn dropping_the_read_half_first_completes() {
-    drop_order_completes(|pty| {
-        let (reader, writer, controller) = pty.into_split();
-        drop(reader);
-        drop(writer);
-        drop(controller);
-    });
+    drop_order_completes(pty, read_half_first);
 }
 
 #[test]
 fn dropping_the_controller_first_completes() {
-    // The awkward order: the controller owns the pseudoconsole, so this drops
-    // it while a live read half is still registered and the console host is
-    // blocked writing.
-    drop_order_completes(|pty| {
-        let (reader, writer, controller) = pty.into_split();
-        drop(controller);
-        drop(writer);
-        drop(reader);
-    });
+    drop_order_completes(pty, controller_first);
 }
 
 #[test]
 fn dropping_the_write_half_first_completes() {
-    drop_order_completes(|pty| {
-        let (reader, writer, controller) = pty.into_split();
-        drop(writer);
-        drop(controller);
-        drop(reader);
-    });
+    drop_order_completes(pty, write_half_first);
+}
+
+#[test]
+fn dropping_the_whole_forced_legacy_session_completes() {
+    drop_order_completes(legacy_pty, drop);
+}
+
+#[test]
+fn dropping_the_read_half_of_a_forced_legacy_session_first_completes() {
+    drop_order_completes(legacy_pty, read_half_first);
+}
+
+#[test]
+fn dropping_the_controller_of_a_forced_legacy_session_first_completes() {
+    drop_order_completes(legacy_pty, controller_first);
+}
+
+#[test]
+fn dropping_the_write_half_of_a_forced_legacy_session_first_completes() {
+    drop_order_completes(legacy_pty, write_half_first);
 }

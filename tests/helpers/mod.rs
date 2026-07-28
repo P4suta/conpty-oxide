@@ -37,7 +37,7 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 
 use conpty_oxide::blocking::{Child, Command, OwnedReadHalf, OwnedWriteHalf, Pty, PtyController};
-use conpty_oxide::{ExitStatus, Size};
+use conpty_oxide::{ConPtyBackend, ExitStatus, Size};
 
 /// How often the watchdog and the polling helpers re-check their condition.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -148,6 +148,26 @@ pub fn pty_with_size(size: Size) -> Pty {
         .size(size)
         .build()
         .expect("building a pty must succeed")
+}
+
+/// Builds a default 24x80 session forced onto the legacy shutdown path.
+///
+/// The backend clone has its `ReleasePseudoConsole` export stripped
+/// (`ConPtyBackend::without_release`, a hidden test hook), so the session
+/// behaves as on Windows versions before 11 24H2 regardless of the machine it
+/// runs on: the console host outlives the child, and only the crate's own
+/// legacy shutdown (the watcher, or closing the console at teardown) can
+/// produce end-of-file. Tests built on this cover the code paths that a
+/// 24H2+ machine would otherwise never take.
+pub fn legacy_pty() -> Pty {
+    let backend = ConPtyBackend::system()
+        .expect("ConPTY must be available")
+        .without_release();
+    assert!(!backend.supports_release());
+    Pty::builder()
+        .backend(backend)
+        .build()
+        .expect("building a forced-legacy pty must succeed")
 }
 
 /// Drains a session's output on its own thread and accumulates it.

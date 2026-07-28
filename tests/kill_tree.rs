@@ -16,9 +16,11 @@ mod helpers;
 
 use std::time::Duration;
 
-use conpty_oxide::blocking::Command;
+use conpty_oxide::blocking::{Command, Pty};
 
-use helpers::{process_is_running, wait_for_descendant, wait_until, with_timeout, Session};
+use helpers::{
+    legacy_pty, process_is_running, pty, wait_for_descendant, wait_until, with_timeout, Session,
+};
 
 const BUDGET: Duration = Duration::from_secs(30);
 
@@ -47,23 +49,37 @@ fn assert_tree_terminated(root: u32, grandchild: u32) {
     );
 }
 
+/// The body of the kill test, shared by the natural-mode and the
+/// forced-legacy variants: after a kill, the tree must be gone *and* the
+/// session must still reach end-of-file, whichever shutdown path produces it.
+fn kill_terminates_the_whole_tree_in(pty: Pty) {
+    let mut session = Session::start_in(pty, Command::new(ROOT_EXE).args(NEVER_ENDING));
+    let root = session.child.id();
+    let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR);
+
+    session.child.kill().expect("kill must succeed");
+    assert_tree_terminated(root, grandchild);
+
+    let status = session.child.wait().expect("waiting must succeed");
+    assert!(!status.success());
+    assert_eq!(status.code(), 1, "a killed tree reports exit code 1");
+
+    // The session must still reach end-of-file after a kill; joining the
+    // collector inside `finish` is what proves it.
+    session.finish();
+}
+
 #[test]
 fn kill_terminates_the_whole_tree() {
     with_timeout(BUDGET, || {
-        let mut session = Session::start(Command::new(ROOT_EXE).args(NEVER_ENDING));
-        let root = session.child.id();
-        let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR);
+        kill_terminates_the_whole_tree_in(pty());
+    });
+}
 
-        session.child.kill().expect("kill must succeed");
-        assert_tree_terminated(root, grandchild);
-
-        let status = session.child.wait().expect("waiting must succeed");
-        assert!(!status.success());
-        assert_eq!(status.code(), 1, "a killed tree reports exit code 1");
-
-        // The session must still reach end-of-file after a kill; joining the
-        // collector inside `finish` is what proves it.
-        session.finish();
+#[test]
+fn kill_terminates_the_whole_tree_on_the_forced_legacy_path() {
+    with_timeout(BUDGET, || {
+        kill_terminates_the_whole_tree_in(legacy_pty());
     });
 }
 
