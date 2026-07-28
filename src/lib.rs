@@ -18,3 +18,9 @@ compile_error!(
     "conpty-oxide only supports Windows targets; \
      build it with a `*-pc-windows-*` target."
 );
+
+mod error;
+mod size;
+
+pub use error::{BackendError, Error, Result};
+pub use size::Size;
