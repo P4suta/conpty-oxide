@@ -147,9 +147,12 @@ pub(crate) struct RootChild {
 ///
 /// See the module documentation for why the three steps happen in this order.
 /// A session hosts exactly one root child; a second call fails with an
-/// [`io::ErrorKind::AlreadyExists`] source. A *failed* spawn leaves the
-/// session reusable, because nothing was attached to the pseudoconsole and no
-/// watcher ran.
+/// [`io::ErrorKind::AlreadyExists`] source. A spawn that fails before the
+/// child process exists leaves the session reusable, because nothing was
+/// attached to the pseudoconsole and no watcher ran. The one failure past
+/// that point — arming the legacy watcher — terminates the child and retires
+/// the session for good: a child was already attached, so later spawns keep
+/// failing with `AlreadyExists`.
 ///
 /// # Errors
 ///
@@ -198,8 +201,10 @@ pub(crate) fn spawn_root(session: &Session, command: &Command) -> Result<RootChi
     if !released && session.eof_on_root_exit {
         if let Err(err) = arm_legacy_watcher(session, &spawned) {
             // A legacy session without a watcher could never reach
-            // end-of-file, so this is fatal. Undo the spawn rather than return
-            // a session that can never finish.
+            // end-of-file, so this is fatal. Terminate the child rather than
+            // return a session that can never finish; `spawned` deliberately
+            // stays `true`, because a child was attached to the pseudoconsole
+            // — the session is retired, not reusable.
             let _ = job.terminate(KILL_EXIT_CODE);
             return Err(spawn_error(command, err));
         }

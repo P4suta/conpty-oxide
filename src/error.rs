@@ -124,8 +124,9 @@ pub enum BackendError {
     /// A bundled `conpty.dll` delegates console hosting to an
     /// `OpenConsole.exe` from the same package; without it the DLL falls back
     /// to the operating system's own console host, which defeats the point of
-    /// bundling one. Both the DLL's own directory and the architecture
-    /// subdirectories (`x64`, `arm64`, `x86`) it searches are checked.
+    /// bundling one. Both places the DLL itself searches are checked: its own
+    /// directory, and the single subdirectory named after the machine's
+    /// native architecture (`x64`, `arm64`, or `x86`).
     #[error("OpenConsole.exe not found next to `{}`", .dll.display())]
     OpenConsoleMissing {
         /// Path of the DLL that requires the missing `OpenConsole.exe`.

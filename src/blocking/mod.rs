@@ -10,11 +10,11 @@
 //!
 //! # Service the output pipe from another thread
 //!
-//! ConPTY's documentation is explicit about this: *"the pseudoconsole's I/O
-//! channels must be serviced from a thread other than the one waiting on the
-//! child, or a full pipe buffer deadlocks the session."* The console host
-//! writes rendered output eagerly; once the pipe buffer fills, the host — and
-//! with it the child — stops making progress. A program that spawns a child
+//! Microsoft's guidance for pseudoconsole sessions strongly recommends
+//! servicing each I/O channel on its own thread, and the deadlock that rule
+//! prevents is real: the console host writes rendered output eagerly; once
+//! the pipe buffer fills, the host — and with it the child — stops making
+//! progress. A program that spawns a child
 //! and then calls [`Child::wait`] without draining the output will hang as
 //! soon as the child produces more than a pipe buffer's worth of text.
 //!
@@ -623,8 +623,8 @@ impl Drop for ConoutReader {
 
 /// The write end of the conin pipe.
 ///
-/// Nothing but the handle: dropping it closes the pipe, which is exactly the
-/// "no more input" signal a child waits for.
+/// Nothing but the handle: dropping it closes the pipe, which the console
+/// host reads as the terminal going away and tears the session down.
 #[derive(Debug)]
 struct ConinWriter {
     file: File,

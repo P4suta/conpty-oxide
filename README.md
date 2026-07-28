@@ -253,7 +253,8 @@ The minimum supported Rust version is **1.75**, verified in CI.
 
 - The entry points the standalone `conpty.dll` exports and this crate does not
   surface yet: `ConptyCreatePseudoConsoleAsUser`,
-  `ConptyShowHidePseudoConsole`, `ConptyReparentPseudoConsole`.
+  `ConptyShowHidePseudoConsole`, `ConptyReparentPseudoConsole`,
+  `ConptyPackPseudoConsole`.
 - Exit detection through `RegisterWaitForSingleObject`, so that waiting on a
   child — and the legacy watcher — no longer parks a thread in
   `WaitForSingleObject`.
@@ -262,7 +263,8 @@ The minimum supported Rust version is **1.75**, verified in CI.
 
 ## Development
 
-`just lint` and `just test` run everything CI checks.
+`just ci` runs everything CI checks: lint, rustdoc with warnings denied, and
+the test suite.
 
 The tests that drive a bundled `conpty.dll` need one to drive, so they are
 opt-in:

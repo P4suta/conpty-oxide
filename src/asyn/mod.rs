@@ -21,11 +21,11 @@
 //!
 //! # Drive the output pipe concurrently with the child
 //!
-//! ConPTY's documentation is explicit about this: the pseudoconsole's I/O
-//! channels must be serviced by something other than whatever is waiting on
-//! the child, or a full pipe buffer deadlocks the session. The console host
-//! writes rendered output eagerly; once the pipe buffer fills, the host — and
-//! with it the child — stops making progress.
+//! Microsoft's guidance for pseudoconsole sessions strongly recommends
+//! servicing each I/O channel on its own thread — here, by something other
+//! than whatever is waiting on the child. The deadlock that rule prevents is
+//! real: the console host writes rendered output eagerly; once the pipe
+//! buffer fills, the host — and with it the child — stops making progress.
 //!
 //! Async makes this easier than threads do, but it does not make it optional:
 //! a task that awaits [`Child::wait`] without also polling the output will

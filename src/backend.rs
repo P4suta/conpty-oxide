@@ -86,8 +86,9 @@ pub(crate) type HPCON = *mut c_void;
 
 /// `PSEUDOCONSOLE_INHERIT_CURSOR`, for `CreatePseudoConsole`'s `dwFlags`.
 ///
-/// Off by default everywhere in this crate, and no public API enables it
-/// yet. The flag makes the pseudoconsole emit a Device
+/// Off by default in both front ends; `PtyBuilder::inherit_cursor` opts in,
+/// and its documentation carries the caveats in full. The flag makes the
+/// pseudoconsole emit a Device
 /// Status Report (`ESC [ 6 n`) on conout immediately after creation and stop
 /// processing input entirely until the answer is written back to conin. A
 /// caller that is not already pumping both pipes therefore deadlocks, and
