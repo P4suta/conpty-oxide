@@ -140,7 +140,7 @@ pub enum BackendError {
 ///
 /// This is required by `Read`/`Write`/`AsyncRead` trait implementations,
 /// which must surface failures as `io::Error`. [`Error::Io`] unwraps to the
-/// inner error, preserving its [`io::ErrorKind`](io::ErrorKind); every other
+/// inner error, preserving its [`io::ErrorKind`]; every other
 /// variant is wrapped whole via [`io::Error::other`] so the full source chain
 /// stays available through
 /// [`get_ref`](io::Error::get_ref)/[`into_inner`](io::Error::into_inner).

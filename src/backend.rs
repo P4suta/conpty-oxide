@@ -215,8 +215,8 @@ struct BackendInner {
 ///
 /// `ConPtyBackend` is `Send + Sync` (auto-derived), and that is sound:
 ///
-/// - [`BackendInner`] holds only a [`BackendKind`] — a unit variant or a
-///   [`PathBuf`] — and a [`ConptyApi`] of bare `extern "system"` function
+/// - `BackendInner` holds only a [`BackendKind`] — a unit variant or a
+///   [`PathBuf`] — and a `ConptyApi` of bare `extern "system"` function
 ///   pointers. Function pointers are `Send + Sync`: they are immutable code
 ///   addresses, not resources.
 /// - The backend owns no `HPCON`, no OS handle, and no interior mutability,
