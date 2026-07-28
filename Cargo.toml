@@ -9,6 +9,25 @@ repository = "https://github.com/P4suta/conpty-oxide"
 readme = "README.md"
 keywords = ["conpty", "pty", "pseudoconsole", "windows", "terminal"]
 categories = ["os::windows-apis", "asynchronous"]
+# Contributor tooling - CI, git hooks, linter and formatter settings, the test
+# fixture downloader - has no bearing on building or using the crate, so it
+# stays in the repository rather than in every published tarball. What a
+# consumer can act on is kept: the sources, the tests, the examples, the two
+# licences, the README, and docs/conpty-pitfalls.md, which the README links to
+# and which documents the behaviour this crate exists to get right.
+exclude = [
+  ".config/",
+  ".github/",
+  ".markdownlint.yaml",
+  ".yamllint",
+  "_typos.toml",
+  "committed.toml",
+  "justfile",
+  "lefthook.yml",
+  "mise.toml",
+  "scripts/",
+  "taplo.toml",
+]
 
 [features]
 default = ["blocking"]
