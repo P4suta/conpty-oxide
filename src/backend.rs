@@ -331,7 +331,11 @@ impl ConptyApi {
 }
 
 /// Which ConPTY implementation a [`ConPtyBackend`] is bound to.
+///
+/// Marked `#[non_exhaustive]`, like the crate's error enums: new kinds may be
+/// added in later releases, so matches on it need a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum BackendKind {
     /// The ConPTY API built into the operating system (`kernel32.dll`).
     System,

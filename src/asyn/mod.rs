@@ -468,6 +468,7 @@ impl Pty {
     /// [`Pty::resize`] cannot be called while the halves are alive and the
     /// halves cannot be moved into a task that outlives this scope — use
     /// [`Pty::into_split`] when either is needed.
+    #[must_use]
     pub fn split(&mut self) -> (ReadHalf<'_>, WriteHalf<'_>) {
         let Self { reader, writer, .. } = self;
         (ReadHalf { reader }, WriteHalf { writer })
@@ -936,6 +937,7 @@ impl Command {
     ///
     /// The program is not resolved here; a missing executable surfaces as
     /// [`Error::Spawn`] with an [`io::ErrorKind::NotFound`] source.
+    #[must_use]
     pub fn new(program: impl AsRef<OsStr>) -> Self {
         Self {
             inner: crate::command::Command::new(program),
