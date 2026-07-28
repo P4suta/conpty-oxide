@@ -1,20 +1,23 @@
 //! Internal building blocks shared by the blocking and async front ends.
 //!
 //! Nothing in this module tree is part of the public API. It holds the
-//! Windows-specific plumbing that both front ends need: the synchronous
-//! anonymous pipes that carry the pseudoconsole's I/O streams, the
-//! pseudoconsole lifecycle state machine built on top of them, the job object
-//! that owns the child's process tree, the `CreateProcessW` call that attaches
-//! a child to both, and child-process exit detection.
+//! Windows-specific plumbing that both front ends need: the pipes that carry
+//! the pseudoconsole's I/O streams, the pseudoconsole lifecycle state machine
+//! built on top of them, the job object that owns the child's process tree,
+//! the `CreateProcessW` call that attaches a child to both, and child-process
+//! exit detection.
 //!
-//! # Why synchronous pipes
+//! # Why ConPTY only ever gets synchronous handles
 //!
 //! `CreatePseudoConsole` documents `hInput` and `hOutput` as "restricted to
 //! synchronous I/O", i.e. handles that do not require an `OVERLAPPED`
-//! structure. Anonymous pipes from `CreatePipe` are always synchronous, so
-//! they satisfy that requirement by construction. The `tokio` front end
-//! therefore cannot hand tokio's overlapped named-pipe handles to ConPTY; it
-//! services these synchronous handles from blocking worker threads instead.
+//! structure. The blocking front end satisfies that with anonymous pipes from
+//! `CreatePipe`, which are synchronous by construction. The `tokio` front end
+//! cannot service synchronous handles itself — tokio's named-pipe types
+//! require overlapped handles for I/O-completion-port registration — so it
+//! uses named-pipe pairs instead: the overlapped server ends stay with us,
+//! and the synchronous client ends go to ConPTY. Either way ConPTY sees only
+//! synchronous handles, which both old and new console hosts accept.
 
 pub(crate) mod job;
 pub(crate) mod pipes;
