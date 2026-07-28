@@ -57,6 +57,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CONPTY_OXIDE_EXPECT_RELEASE: ${{ matrix.expect_release }}
+      # The bundled conpty.dll is fetched below on every leg, so the two
+      # variables together cover the product: windows-2022 runs a legacy
+      # system ConPTY alongside a modern bundle, windows-latest a released
+      # system ConPTY alongside the same bundle. The bundle's own lifecycle
+      # mode does not depend on the runner image, which is exactly why the
+      # external-backend tests are worth running on both.
+      CONPTY_OXIDE_TEST_DLL_DIR: ${{ github.workspace }}/vendor/conpty
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
@@ -66,6 +73,21 @@ jobs:
       - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
         with:
           tool: cargo-nextest
+      # The package is version-pinned and checksum-pinned inside the script,
+      # so keying the cache on the script's hash invalidates it exactly when
+      # the pin moves and never otherwise.
+      - name: cache the ConPTY package
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: vendor/.package
+          key: conpty-package-${{ hashFiles('scripts/fetch-conpty.ps1') }}
+      # Verifies the SHA-256 (cached or freshly downloaded) and that the
+      # extracted conpty.dll and OpenConsole.exe report the same
+      # ProductVersion, so a tampered or mismatched bundle fails here rather
+      # than as a puzzling crash inside a test.
+      - name: fetch the bundled ConPTY
+        shell: pwsh
+        run: ./scripts/fetch-conpty.ps1
       - name: build
         run: cargo build --all-features
       - name: test
