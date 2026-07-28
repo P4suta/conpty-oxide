@@ -120,6 +120,12 @@ impl Session {
         self.backend.supports_clear()
     }
 
+    /// Returns whether this session's backend exports
+    /// `ReleasePseudoConsole`; see `ConPtyBackend::supports_release`.
+    pub(crate) fn supports_release(&self) -> bool {
+        self.backend.supports_release()
+    }
+
     /// Returns which ConPTY implementation backs this session.
     pub(crate) fn backend_kind(&self) -> &BackendKind {
         self.backend.kind()

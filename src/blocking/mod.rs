@@ -340,6 +340,24 @@ impl Pty {
         self.inner.supports_clear()
     }
 
+    /// Returns whether this session's backend exports
+    /// `ReleasePseudoConsole`, which decides which of the two lifecycles from
+    /// the module documentation the session runs.
+    ///
+    /// With `true`, the session is released right after [`Command::spawn`]
+    /// and end-of-file arrives naturally once the console host exits. With
+    /// `false`, end-of-file has to be forced by the legacy watcher that
+    /// [`PtyBuilder::eof_on_root_exit`] controls, about a second after the
+    /// root child exits.
+    ///
+    /// A session built without an explicit backend can only learn its
+    /// lifecycle here: which backend the default resolves to depends on the
+    /// operating system and on any bundle next to the executable.
+    #[must_use]
+    pub fn supports_release(&self) -> bool {
+        self.inner.supports_release()
+    }
+
     /// Returns which ConPTY implementation backs this session.
     #[must_use]
     pub fn backend_kind(&self) -> &BackendKind {
@@ -538,6 +556,13 @@ impl PtyController {
     #[must_use]
     pub fn supports_clear(&self) -> bool {
         self.inner.supports_clear()
+    }
+
+    /// Returns whether this session's backend exports
+    /// `ReleasePseudoConsole`. See [`Pty::supports_release`].
+    #[must_use]
+    pub fn supports_release(&self) -> bool {
+        self.inner.supports_release()
     }
 
     /// Returns which ConPTY implementation backs this session.
@@ -1097,6 +1122,29 @@ mod tests {
             .build()
             .expect("building must succeed");
         assert_eq!(pty.size(), Size::new(50, 132));
+    }
+
+    /// `eof_on_root_exit`'s documented behaviour depends on whether the
+    /// backend has `ReleasePseudoConsole`, so a caller must be able to ask a
+    /// built session which lifecycle it runs — and the answer has to match
+    /// the backend's own, session by session rather than machine-wide.
+    #[test]
+    fn supports_release_matches_the_backend() {
+        let backend = ConPtyBackend::system().expect("ConPTY must be available");
+        let expected = backend.supports_release();
+        let pty = Pty::builder()
+            .backend(backend)
+            .build()
+            .expect("building must succeed");
+        assert_eq!(pty.supports_release(), expected);
+        let (_reader, _writer, controller) = pty.into_split();
+        assert_eq!(controller.supports_release(), expected);
+
+        // The query reflects the session's own backend, not the machine.
+        let legacy = legacy_pty();
+        assert!(!legacy.supports_release());
+        let (_reader, _writer, controller) = legacy.into_split();
+        assert!(!controller.supports_release());
     }
 
     #[test]
