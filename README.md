@@ -73,8 +73,8 @@ add the `tokio` feature (and drop the default if you do not need both):
 ```toml
 [dependencies]
 conpty-oxide = { version = "0.1", default-features = false, features = ["tokio"] }
-# The crate itself needs only tokio's net, rt and sync features; these are the
-# ones the example below uses directly.
+# The crate itself needs only tokio's net and rt features; these are the ones
+# the example below uses directly.
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread"] }
 ```
 
