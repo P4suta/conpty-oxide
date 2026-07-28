@@ -19,43 +19,14 @@ use std::time::Duration;
 use conpty_oxide::blocking::Command;
 use conpty_oxide::Size;
 
-use helpers::{pty_with_size, strip_escapes, wait_until, with_timeout, Session};
+use helpers::{
+    expected_size, pty_with_size, reported_size, strip_escapes, wait_until, with_timeout, Session,
+};
 
 const BUDGET: Duration = Duration::from_secs(60);
 
 /// How long the shell gets to answer a typed command.
 const ANSWER: Duration = Duration::from_secs(15);
-
-/// Returns the dimensions reported by the most recent `mode con` in `raw`, as
-/// `(rows, columns)`.
-///
-/// The most recent one is what matters: resizing makes the console host
-/// repaint the viewport, which re-emits the *previous* answer verbatim. Only
-/// the last occurrence of each label is guaranteed to belong to the reply to
-/// the last question.
-fn reported_size(raw: &str) -> Option<(u32, u32)> {
-    let text = strip_escapes(raw);
-    Some((
-        last_number(&text, "Lines:")?,
-        last_number(&text, "Columns:")?,
-    ))
-}
-
-/// Returns the number that follows the last occurrence of `label`.
-fn last_number(text: &str, label: &str) -> Option<u32> {
-    text.rmatch_indices(label).find_map(|(at, _)| {
-        text[at + label.len()..]
-            .split_whitespace()
-            .next()?
-            .parse()
-            .ok()
-    })
-}
-
-/// The pair `mode con` should report for `size`.
-fn expected(size: Size) -> Option<(u32, u32)> {
-    Some((u32::from(size.rows()), u32::from(size.cols())))
-}
 
 #[test]
 fn the_child_observes_a_resize() {
@@ -72,7 +43,7 @@ fn the_child_observes_a_resize() {
         session.write_line("mode con");
         assert!(
             wait_until(ANSWER, || reported_size(&session.output.text())
-                == expected(initial)),
+                == expected_size(initial)),
             "the child never reported the session's initial size {initial}: {:?}",
             strip_escapes(&session.output.text())
         );
@@ -86,7 +57,7 @@ fn the_child_observes_a_resize() {
         session.write_line("mode con");
         assert!(
             wait_until(ANSWER, || reported_size(&session.output.text())
-                == expected(resized)),
+                == expected_size(resized)),
             "the child never observed the resize to {resized}: {:?}",
             strip_escapes(&session.output.text())
         );

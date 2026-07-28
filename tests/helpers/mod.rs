@@ -371,6 +371,42 @@ pub fn strip_escapes(text: &str) -> String {
     }
 }
 
+/// Returns the dimensions reported by the most recent `mode con` in `raw`, as
+/// `(rows, columns)`.
+///
+/// Asking the child what size it believes it has is the only way to catch a
+/// swapped `COORD`: `ResizePseudoConsole` takes `(X = columns, Y = rows)`, the
+/// mirror image of the crate's own [`Size`], and a swapped pair still
+/// succeeds. `mode con` is that question, on every Windows installation.
+///
+/// The *most recent* answer is the one that counts. Resizing makes the console
+/// host repaint the viewport, which re-emits the previous answer verbatim, so
+/// only the last occurrence of each label is guaranteed to belong to the reply
+/// to the last question.
+pub fn reported_size(raw: &str) -> Option<(u32, u32)> {
+    let text = strip_escapes(raw);
+    Some((
+        last_number(&text, "Lines:")?,
+        last_number(&text, "Columns:")?,
+    ))
+}
+
+/// Returns the number that follows the last occurrence of `label`.
+fn last_number(text: &str, label: &str) -> Option<u32> {
+    text.rmatch_indices(label).find_map(|(at, _)| {
+        text[at + label.len()..]
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    })
+}
+
+/// The pair [`reported_size`] must return once `size` has taken effect.
+pub fn expected_size(size: Size) -> Option<(u32, u32)> {
+    Some((u32::from(size.rows()), u32::from(size.cols())))
+}
+
 /// One entry of a process snapshot.
 #[derive(Debug, Clone)]
 pub struct ProcessEntry {
