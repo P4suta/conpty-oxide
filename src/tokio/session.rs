@@ -104,7 +104,7 @@ impl Session {
         self.controller.supports_clear()
     }
 
-    /// Drains output to EOF, then awaits the already-finished root process.
+    /// Drains output to EOF, then waits for the root process status.
     ///
     /// The future owns the whole session. Cancelling it drops the managed
     /// child and its kill-on-close Job, terminating the process tree.

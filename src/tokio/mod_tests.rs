@@ -1121,11 +1121,16 @@ async fn managed_session_delegates_io_and_debugs_named_parts() {
         .await
         .expect("reading through Session must reach EOF");
     assert!(output.contains(MARKER), "{output}");
-    let status = session
+    // Conout EOF and the root process handle becoming signaled are
+    // independent kernel events. Released ConPTY can expose EOF a scheduling
+    // instant first, so `try_wait` may still return None; the async wait
+    // through SessionParts below proves completion.
+    if let Some(status) = session
         .try_wait()
-        .expect("polling a completed managed session must succeed")
-        .expect("EOF means the root child has completed");
-    assert!(status.success());
+        .expect("polling the managed session must succeed")
+    {
+        assert!(status.success());
+    }
 
     session
         .shutdown()
@@ -1157,9 +1162,34 @@ async fn shutting_down_a_live_managed_session_retires_its_input() {
     complete_within(
         "shutting_down_a_live_managed_session_retires_its_input",
         async {
+            const MARKER: &str = "tokio-managed-shutdown-ready";
             let mut session = Command::new("cmd.exe")
+                .args(["/d", "/q"])
                 .spawn()
                 .expect("managed spawning must succeed");
+
+            // Prove the client has finished initialization before closing its
+            // terminal. On legacy Windows, closing during loader startup can
+            // legitimately surface STATUS_DLL_INIT_FAILED instead of the
+            // CTRL_CLOSE_EVENT status this test is specifically checking.
+            session
+                .write_all(format!("echo {MARKER}\r\n").as_bytes())
+                .await
+                .expect("writing the readiness marker must succeed");
+            session
+                .flush()
+                .await
+                .expect("flushing the readiness marker must succeed");
+            let mut seen = String::new();
+            let mut buffer = [0_u8; 4096];
+            while !seen.contains(MARKER) {
+                let read = session
+                    .read(&mut buffer)
+                    .await
+                    .expect("reading the readiness marker must succeed");
+                assert_ne!(read, 0, "the session ended before the child was ready");
+                seen.push_str(&String::from_utf8_lossy(&buffer[..read]));
+            }
 
             session.shutdown().await.expect("shutdown must succeed");
             let error = session

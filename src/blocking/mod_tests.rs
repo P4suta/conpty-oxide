@@ -1006,11 +1006,16 @@ fn managed_session_delegates_io_and_debugs_named_parts() {
                 .read_to_string(&mut output)
                 .expect("reading through Session must reach EOF");
             assert!(output.contains(MARKER), "{output}");
-            let status = session
+            // Conout EOF and the root process handle becoming signaled are
+            // independent kernel events. Released ConPTY can expose EOF a
+            // scheduling instant first, so `try_wait` may still return None;
+            // the blocking wait through SessionParts below proves completion.
+            if let Some(status) = session
                 .try_wait()
-                .expect("polling a completed managed session must succeed")
-                .expect("EOF means the root child has completed");
-            assert!(status.success());
+                .expect("polling the managed session must succeed")
+            {
+                assert!(status.success());
+            }
 
             let mut parts = session.into_parts();
             let parts_debug = format!("{parts:?}");
