@@ -18,10 +18,12 @@
 
 pub mod helpers;
 
-use std::io::Write;
+use std::io::{self, Read, Write};
+use std::thread;
 use std::time::Duration;
 
 use conpty_oxide::blocking::Command;
+use conpty_oxide::{ErrorKind, Size};
 
 use helpers::sync::Session;
 use helpers::{process_is_running, wait_for_descendant, wait_until, with_timeout};
@@ -151,8 +153,11 @@ fn collecting_output_is_bounded_by_the_root_process() {
         let root = session.id();
         session
             .write_all(
-                format!("start \"\" /b ping -t 127.0.0.1 >nul & echo {MARKER} & exit /b 23\r\n")
-                    .as_bytes(),
+                format!(
+                    "start \"\" /b ping -t 127.0.0.1 >nul & echo {MARKER} & \
+                     ping -n 3 127.0.0.1 >nul & exit /b 23\r\n"
+                )
+                .as_bytes(),
             )
             .expect("the root command must reach the session");
 
@@ -167,5 +172,83 @@ fn collecting_output_is_bounded_by_the_root_process() {
             "the root's teardown tail must be preserved"
         );
         assert_tree_terminated(root, grandchild);
+    });
+}
+
+#[test]
+fn root_exit_terminates_descendants_after_into_parts() {
+    with_timeout(BUDGET, || {
+        const MARKER: &str = "root-watcher-blocking-tail";
+
+        let mut session = Command::new(ROOT_EXE)
+            .args(["/d", "/q"])
+            .spawn()
+            .expect("managed spawning must succeed");
+        let root = session.id();
+        session
+            .write_all(
+                format!(
+                    "start \"\" /b ping -t 127.0.0.1 >nul & echo {MARKER} & ping -n 3 127.0.0.1 >nul & exit /b 23\r\n"
+                )
+                .as_bytes(),
+            )
+            .expect("the root command must reach the session");
+
+        let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR);
+        let parts = session.into_parts();
+        let mut child = parts.child;
+        let mut output = parts.output;
+        let input = parts.input;
+        let controller = parts.controller;
+        let reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            output
+                .read_to_end(&mut bytes)
+                .expect("output must reach EOF after root exit");
+            bytes
+        });
+
+        let status = child.wait().expect("root wait must succeed");
+        assert_eq!(status.code(), 23);
+        assert_tree_terminated(root, grandchild);
+
+        let bytes = reader
+            .join()
+            .expect("the output reader thread must not panic");
+        assert!(
+            String::from_utf8_lossy(&bytes).contains(MARKER),
+            "the root's final output must survive watcher teardown"
+        );
+
+        let resize = controller
+            .resize(Size::default())
+            .expect_err("resize after root teardown must fail");
+        assert_eq!(resize.kind(), ErrorKind::Resize);
+        assert_eq!(
+            resize
+                .io_error()
+                .expect("resize retains its I/O source")
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+
+        let clear = controller
+            .clear()
+            .expect_err("clear after root teardown must fail");
+        if controller.supports_clear() {
+            assert_eq!(clear.kind(), ErrorKind::Clear);
+            assert_eq!(
+                clear
+                    .io_error()
+                    .expect("clear retains its I/O source")
+                    .kind(),
+                io::ErrorKind::NotConnected
+            );
+        } else {
+            assert_eq!(clear.kind(), ErrorKind::UnsupportedFeature);
+        }
+
+        drop(input);
+        drop(controller);
     });
 }

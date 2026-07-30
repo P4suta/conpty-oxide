@@ -217,8 +217,8 @@ pub fn strip_escapes(text: &str) -> String {
 ///
 /// Asking the child what size it believes it has is the only way to catch a
 /// swapped `COORD`: `ResizePseudoConsole` takes `(X = columns, Y = rows)`, the
-/// mirror image of the crate's own [`Size`], and a swapped pair still
-/// succeeds. `mode con` is that question, on every Windows installation.
+/// same order as [`Size::try_new`], and a swapped pair still succeeds. `mode
+/// con` is that question, on every Windows installation.
 ///
 /// The *most recent* answer is the one that counts. Resizing makes the console
 /// host repaint the viewport, which re-emits the previous answer verbatim, so

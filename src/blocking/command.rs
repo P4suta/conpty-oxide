@@ -200,10 +200,8 @@ impl Command {
     ///
     /// The session's shutdown strategy is armed as part of this call, in the
     /// order `ConPTY` requires: the child is created, the pseudoconsole is
-    /// released if the backend supports it, and only if it does not — and only
-    /// when
-    /// [`PtyBuilder::eof_on_root_exit`](super::PtyBuilder::eof_on_root_exit) is
-    /// set — is the legacy registered wait installed.
+    /// released when possible, and a root watcher is always installed to end
+    /// remaining Job members. Legacy sessions also use it to force output EOF.
     ///
     /// A pseudoconsole hosts exactly one root child; spawning into a `Pty`
     /// that already has one fails with an
@@ -238,9 +236,9 @@ impl Command {
 /// [`Child::kill`] terminates the whole process tree rather than just the
 /// process this crate created.
 ///
-/// Dropping a `Child` does not wait for the process. A child obtained from
-/// managed [`SessionParts`](super::SessionParts) terminates its process tree
-/// on drop.
+/// Every publicly obtainable `Child` is managed and kill-on-drop. Dropping it
+/// does not wait; the Job terminates the root process and every descendant
+/// still running.
 ///
 /// The process handle is available only through the lifetime-safe
 /// [`AsHandle`] implementation:

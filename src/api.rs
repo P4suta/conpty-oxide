@@ -27,7 +27,7 @@ pub struct SessionOptions {
 }
 
 impl SessionOptions {
-    /// Creates options with a 24x80 terminal and automatic backend selection.
+    /// Creates options with an 80x24 terminal and automatic backend selection.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

@@ -5,8 +5,8 @@
 //! A resize is visible to the program running inside the session.
 //!
 //! `ResizePseudoConsole` is easy to call and easy to get wrong — the `COORD`
-//! it takes is `(X = columns, Y = rows)`, the mirror image of the
-//! `(rows, cols)` order the crate's own `Size` uses. A swapped pair still
+//! it takes is `(X = columns, Y = rows)`, the same order as
+//! `Size::try_new(columns, rows)`. A swapped pair still
 //! succeeds, so nothing but asking the child what size it thinks it has can
 //! catch it; that is why both dimensions are checked, and checked from the
 //! same reply.
@@ -42,7 +42,7 @@ const CONCURRENT_ROUNDS: u16 = 12;
 const CLOSE_RACE_BUDGET: Duration = Duration::from_secs(10);
 
 fn size(rows: u16, cols: u16) -> Size {
-    Size::try_new(rows, cols).expect("test dimensions must be valid")
+    Size::try_new(cols, rows).expect("test dimensions must be valid")
 }
 
 #[test]

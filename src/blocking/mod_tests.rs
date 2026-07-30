@@ -91,7 +91,7 @@ struct Running {
 }
 
 impl Running {
-    /// Spawns `command` in a fresh 24x80 session.
+    /// Spawns `command` in a fresh 80x24 session.
     fn start(command: &mut Command) -> Self {
         Self::start_in(pty(), command)
     }
@@ -860,6 +860,22 @@ fn managed_output_drains_more_than_pipe_capacity() {
             (1..=6000).collect::<Vec<_>>(),
             "the complete ordered VT payload must be collected without gaps or duplicates"
         );
+    });
+}
+
+#[test]
+fn managed_wait_drains_more_than_pipe_capacity_without_collecting() {
+    complete_within("managed_wait_drains_more_than_pipe_capacity", || {
+        let status = Command::new("cmd.exe")
+            .raw_arg(
+                r#"/d /q /c "for /L %i in (1,1,6000) do @echo managed-wait-%i-01234567890123456789 & exit /b 37""#,
+            )
+            .spawn()
+            .expect("managed spawning must succeed")
+            .wait()
+            .expect("managed wait must drain output and complete");
+
+        assert_eq!(status.code(), 37);
     });
 }
 

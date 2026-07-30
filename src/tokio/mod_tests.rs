@@ -123,7 +123,7 @@ struct Running {
 }
 
 impl Running {
-    /// Spawns `command` in a fresh 24x80 session.
+    /// Spawns `command` in a fresh 80x24 session.
     fn start(command: &mut Command) -> Self {
         Self::start_in(pty(), command)
     }
@@ -941,6 +941,23 @@ async fn managed_output_drains_more_than_pipe_capacity() {
 }
 
 #[tokio::test]
+async fn managed_wait_drains_more_than_pipe_capacity_without_collecting() {
+    let status = Box::pin(complete_within(
+        "managed_wait_drains_more_than_pipe_capacity",
+        Command::new("cmd.exe")
+            .raw_arg(
+                r#"/d /q /c "for /L %i in (1,1,6000) do @echo managed-wait-%i-01234567890123456789 & exit /b 37""#,
+            )
+            .spawn()
+            .expect("managed spawning must succeed")
+            .wait(),
+    ))
+    .await
+    .expect("managed wait must drain output and complete");
+    assert_eq!(status.code(), 37);
+}
+
+#[tokio::test]
 async fn managed_output_keeps_input_open_until_the_real_exit() {
     let output = Box::pin(complete_within(
         "managed_output_keeps_input_open",
@@ -1320,6 +1337,31 @@ async fn cancelling_collect_output_kills_the_managed_tree() {
             .await
             .is_err(),
         "the interactive child must still be running when collection is cancelled"
+    );
+    assert_eq!(
+        watched.wait().expect("waiting must succeed"),
+        KILL_EXIT_CODE
+    );
+}
+
+#[tokio::test]
+async fn cancelling_session_wait_kills_the_managed_tree() {
+    let session = Command::new("cmd.exe")
+        .spawn()
+        .expect("managed spawn must succeed");
+    let watched = ProcessWaiter::new(
+        session
+            .child
+            .as_handle()
+            .try_clone_to_owned()
+            .expect("duplicating the process handle must succeed"),
+    );
+
+    assert!(
+        ::tokio::time::timeout(Duration::from_millis(50), session.wait())
+            .await
+            .is_err(),
+        "the interactive child must still be running when wait is cancelled"
     );
     assert_eq!(
         watched.wait().expect("waiting must succeed"),

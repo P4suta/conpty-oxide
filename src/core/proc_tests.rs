@@ -17,7 +17,7 @@ use windows_sys::Win32::System::JobObjects::IsProcessInJob;
 use crate::backend::ConPtyBackend;
 use crate::core::pipes::{create_sync_pipes, SyncPipes};
 use crate::core::pseudocon::PseudoConsole;
-use crate::core::wait::{spawn_legacy_watcher, ProcessWaiter};
+use crate::core::wait::{spawn_root_watcher, ProcessWaiter};
 use crate::size::Size;
 
 /// Grace period the legacy watcher gets in tests; short enough to keep the
@@ -62,7 +62,7 @@ fn complete_within(name: &str, timeout: Duration, f: impl FnOnce() + Send + 'sta
 /// ends last.
 struct Session {
     console: PseudoConsole,
-    job: Job,
+    job: Arc<Job>,
     /// Taken by [`Session::drain_conout`]; still here when a test never
     /// starts a reader, so dropping the session retires it either way.
     conout_read: Option<OwnedHandle>,
@@ -85,7 +85,7 @@ impl Session {
             .expect("CreatePseudoConsole must succeed");
         Self {
             console,
-            job: Job::create(kill_on_close).expect("creating a job must succeed"),
+            job: Arc::new(Job::create(kill_on_close).expect("creating a job must succeed")),
             conout_read: Some(conout_read),
             _conin_write: conin_write,
         }
@@ -125,9 +125,7 @@ impl Session {
         // An `Err` from the release call means the session was demoted to
         // legacy mode, so it is handled exactly like "no release export".
         let released = self.console.release_after_spawn().unwrap_or(false);
-        if !released {
-            self.start_legacy_watcher(child);
-        }
+        self.start_root_watcher(child, !released);
     }
 
     /// Performs the post-spawn lifecycle step, forced onto the legacy
@@ -139,17 +137,23 @@ impl Session {
     /// end-of-file on conout. Without this, the fallback the crate depends
     /// on for older systems would go untested on every modern machine.
     fn arm_shutdown_as_legacy(&self, child: &SpawnedChild) {
-        self.start_legacy_watcher(child);
+        self.start_root_watcher(child, true);
     }
 
-    fn start_legacy_watcher(&self, child: &SpawnedChild) {
+    fn start_root_watcher(&self, child: &SpawnedChild, close_legacy: bool) {
         let watched = child
             .process
             .as_handle()
             .try_clone_to_owned()
             .expect("duplicating the process handle must succeed");
-        spawn_legacy_watcher(watched, Arc::clone(self.console.shared()), TEST_GRACE)
-            .expect("spawning the legacy watcher must succeed");
+        spawn_root_watcher(
+            watched,
+            Arc::downgrade(&self.job),
+            Arc::clone(self.console.shared()),
+            TEST_GRACE,
+            close_legacy,
+        )
+        .expect("spawning the root watcher must succeed");
     }
 }
 

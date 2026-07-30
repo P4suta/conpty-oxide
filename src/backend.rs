@@ -513,7 +513,7 @@ impl ConPtyBackend {
         flags: u32,
     ) -> io::Result<HPCON> {
         let api = &self.inner.api;
-        let (rows, cols) = size.to_i16_pair();
+        let (cols, rows) = size.to_i16_pair();
         let size = COORD { X: cols, Y: rows };
         let mut hpc: HPCON = 0;
 
@@ -547,7 +547,7 @@ impl ConPtyBackend {
     #[cfg(any(feature = "blocking", feature = "tokio", test))]
     pub(super) unsafe fn resize(&self, hpc: HPCON, size: Size) -> io::Result<()> {
         let api = &self.inner.api;
-        let (rows, cols) = size.to_i16_pair();
+        let (cols, rows) = size.to_i16_pair();
         let size = COORD { X: cols, Y: rows };
 
         // SAFETY: `hpc` is live per this function's contract, and the

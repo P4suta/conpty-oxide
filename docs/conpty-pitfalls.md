@@ -446,18 +446,18 @@ therefore a tuning constant, not a load-bearing one; the cost it imposes is
 that a legacy session's end-of-file arrives about a second after the child
 exits.
 
-**In this crate.** The watcher lives in `src/core/wait.rs` and is armed only
-when the session could not be released and `PtyBuilder::eof_on_root_exit` is
-set (the default). Windows waits on its own duplicate of the process handle;
-the crate creates no thread while the child is alive. After exit, a short-lived
-worker sleeps out the grace period and requests the close — never from the
-reader's thread. If worker creation fails, the registered long-function
-callback completes that post-exit work itself. The builder documents the two
-side effects honestly: output from descendants that outlive the root child may
-be cut off, and the session is torn down even if the caller still holds the
-controller, so `resize` starts failing with `NotConnected`. Turning the watcher
-off is supported and leaves the caller responsible for knowing when the
-session is finished.
+**In this crate.** The root watcher lives in `src/core/wait.rs` and is armed for
+every backend. Windows waits on its own duplicate of the process handle, so the
+crate creates no thread while the child is alive. The registration holds weak
+references to the Job and pseudoconsole lifecycle core; it therefore cannot
+defeat kill-on-close when public handles are dropped. After root exit, a short-
+lived worker terminates remaining Job members after the root's real status is
+available. Released backends then reach EOF naturally. On a legacy backend the
+same worker sleeps out the grace and requests close — never from the reader's
+thread. If worker creation fails, the registered long-function callback
+completes the post-exit work itself. Teardown still occurs when the caller holds
+a controller, so `resize` and supported `clear` calls report `NotConnected`
+after completion.
 
 **Sources.**
 
@@ -480,7 +480,7 @@ re-emission of the current screen on conout.
 **In this crate.** The read halves are byte streams (`Read` / `AsyncRead`) and
 their documentation says to decode across reads rather than per read; the crate
 does no decoding of its own and hands through exactly what the host wrote.
-`Size` is `(rows, cols)` while ConPTY's `COORD` is `(X = columns, Y = rows)`,
+`Size::try_new` is `(columns, rows)`, matching `COORD(X, Y)`,
 so `tests/resize.rs` asks the child what size it thinks it has (`mode con`)
 rather than trusting that the call succeeded — a swapped pair succeeds too.
 
@@ -500,7 +500,7 @@ rather than trusting that the call succeeded — a swapped pair succeeds too.
 | Export detection and module pinning | `src/backend/exports.rs` |
 | Console host discovery | `src/backend/bundle.rs`, `scripts/fetch-conpty.ps1` |
 | Cursor inheritance | `src/backend.rs`, both frontend `builder.rs` modules |
-| Exit detection, legacy watcher | `src/core/wait.rs` |
+| Exit detection, root watcher, legacy close grace | `src/core/wait.rs` |
 | Kill tree | `src/core/job.rs` |
 | Async teardown, cancelled I/O | `src/tokio/pty.rs` |
 | Anonymous and overlapped pipe creation | `src/core/pipes/` |

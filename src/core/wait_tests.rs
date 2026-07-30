@@ -43,6 +43,10 @@ fn duplicated_handle(child: &Child) -> OwnedHandle {
         .expect("DuplicateHandle must succeed")
 }
 
+fn watcher_job() -> Arc<Job> {
+    Arc::new(Job::create(true).expect("creating an empty watcher test Job must succeed"))
+}
+
 /// A minimal executor whose Waker polls the registered wait immediately on
 /// the Windows callback thread.
 ///
@@ -361,8 +365,10 @@ fn legacy_wait_object_returns_the_published_registration() {
     let expected = child.as_handle().as_raw_handle();
     let context = LegacyWaitContext {
         process: ProcessWaiter::new(duplicated_handle(&child)),
+        job: Weak::new(),
         shared: Weak::new(),
         grace: Duration::ZERO,
+        close_legacy: false,
         spawn_close_worker: true,
         wait_object: Mutex::new(Some(expected)),
         wait_object_ready: Condvar::new(),
@@ -433,10 +439,13 @@ fn legacy_watcher_closes_the_console_after_child_exit() {
     // session is never released, so this is the legacy path even on a
     // machine whose backend supports release.
     let mut child = spawn_cmd(&["/C", "exit 0"]);
-    spawn_legacy_watcher(
+    let job = watcher_job();
+    spawn_root_watcher(
         duplicated_handle(&child),
+        Arc::downgrade(&job),
         Arc::clone(&shared),
         Duration::from_millis(50),
+        true,
     )
     .expect("spawning the watcher must succeed");
 
@@ -490,10 +499,13 @@ fn legacy_watcher_closes_in_callback_when_worker_spawn_fails() {
     let shared = Arc::clone(console.shared());
 
     let mut child = spawn_cmd(&["/C", "exit 0"]);
-    spawn_legacy_watcher_with_worker_spawn_failure(
+    let job = watcher_job();
+    spawn_root_watcher_with_worker_spawn_failure(
         duplicated_handle(&child),
+        Arc::downgrade(&job),
         Arc::clone(&shared),
         Duration::from_millis(10),
+        true,
     )
     .expect("registering the forced-fallback watcher must succeed");
 
@@ -520,7 +532,7 @@ fn legacy_watcher_closes_in_callback_when_worker_spawn_fails() {
 }
 
 #[test]
-fn legacy_watcher_is_a_no_op_for_released_sessions() {
+fn root_watcher_does_not_close_released_sessions() {
     let backend = ConPtyBackend::system().expect("ConPTY must be available");
     if !backend.supports_release() {
         return;
@@ -539,16 +551,19 @@ fn legacy_watcher_is_a_no_op_for_released_sessions() {
         .expect("ReleasePseudoConsole must succeed"));
 
     let mut child = spawn_cmd(&["/C", "exit 0"]);
-    spawn_legacy_watcher(
+    let job = watcher_job();
+    spawn_root_watcher(
         duplicated_handle(&child),
+        Arc::downgrade(&job),
         Arc::clone(console.shared()),
         Duration::from_millis(10),
+        false,
     )
-    .expect("the released no-op path must succeed");
+    .expect("the released watcher path must succeed");
     child.wait().expect("reaping via std must succeed");
 
-    // Give a (hypothetical, buggy) registered callback time to act, then
-    // confirm nothing closed the console behind our back.
+    // Give the registered callback time to terminate the (empty) Job, then
+    // confirm the released backend did not close the console behind our back.
     thread::sleep(Duration::from_millis(100));
     assert!(!console.shared().is_closed());
     drop(console);

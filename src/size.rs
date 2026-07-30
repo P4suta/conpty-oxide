@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 ///
 /// A `Size` is always valid: both dimensions are non-zero and at most
 /// [`Size::MAX_DIMENSION`]. Construct one with [`Size::try_new`];
-/// [`Size::default`] is 24 rows by 80 columns.
+/// [`Size::default`] is 80 columns by 24 rows.
 ///
 /// # Examples
 ///
@@ -25,7 +25,7 @@ use crate::error::{Error, Result};
 /// use conpty_oxide::Size;
 ///
 /// # fn main() -> conpty_oxide::Result<()> {
-/// let size = Size::try_new(24, 80)?;
+/// let size = Size::try_new(80, 24)?;
 /// assert_eq!(size.rows(), 24);
 /// assert_eq!(size.cols(), 80);
 /// assert_eq!(size, Size::default());
@@ -51,7 +51,7 @@ impl Size {
     ///
     /// Returns an error with [`crate::ErrorKind::InvalidSize`] if either
     /// dimension is `0` or greater than [`Size::MAX_DIMENSION`].
-    pub const fn try_new(rows: u16, cols: u16) -> Result<Self> {
+    pub const fn try_new(cols: u16, rows: u16) -> Result<Self> {
         if rows == 0 || cols == 0 || rows > Self::MAX_DIMENSION || cols > Self::MAX_DIMENSION {
             return Err(Error::invalid_size(rows, cols));
         }
@@ -70,8 +70,8 @@ impl Size {
         self.cols
     }
 
-    /// Returns `(rows, cols)` as `i16`, in that order, for building a
-    /// `ConPTY` `COORD` (`COORD.Y` = rows, `COORD.X` = cols).
+    /// Returns `(cols, rows)` as `i16`, in that order, for building a
+    /// `ConPTY` `COORD` (`COORD.X` = cols, `COORD.Y` = rows).
     ///
     /// The conversion cannot truncate: both dimensions are guaranteed to be
     /// at most [`Size::MAX_DIMENSION`] (`i16::MAX`).
@@ -82,8 +82,8 @@ impl Size {
     #[cfg(any(feature = "blocking", feature = "tokio", test))]
     pub(super) const fn to_i16_pair(self) -> (i16, i16) {
         (
-            i16::from_ne_bytes(self.rows.to_ne_bytes()),
             i16::from_ne_bytes(self.cols.to_ne_bytes()),
+            i16::from_ne_bytes(self.rows.to_ne_bytes()),
         )
     }
 }
@@ -106,7 +106,7 @@ impl fmt::Display for Size {
 /// Constructs a hard-coded valid size for crate-local tests.
 #[cfg(test)]
 pub(super) fn test_size(rows: u16, cols: u16) -> Size {
-    Size::try_new(rows, cols).expect("the hard-coded test size is valid")
+    Size::try_new(cols, rows).expect("the hard-coded test size is valid")
 }
 
 #[cfg(test)]

@@ -25,10 +25,12 @@
 
 pub mod helpers;
 
+use std::io;
 use std::time::Duration;
 
 use conpty_oxide::tokio::Command;
-use tokio::io::AsyncWriteExt;
+use conpty_oxide::{ErrorKind, Size};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use helpers::tokio_support::{poll_until, wait_for_descendant, within, Session};
 use helpers::{process_is_running, watchdog};
@@ -234,7 +236,8 @@ async fn collecting_output_is_bounded_by_the_root_process() {
             session
                 .write_all(
                     format!(
-                        "start \"\" /b ping -t 127.0.0.1 >nul & echo {MARKER} & exit /b 23\r\n"
+                        "start \"\" /b ping -t 127.0.0.1 >nul & echo {MARKER} & \
+                         ping -n 3 127.0.0.1 >nul & exit /b 23\r\n"
                     )
                     .as_bytes(),
                 )
@@ -357,6 +360,86 @@ async fn wait_registered_after_exit_reports_the_cached_os_status() {
 
             let (_output, again) = session.finish().await;
             assert_eq!(again, status, "the status must remain cached");
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn root_exit_terminates_descendants_after_into_parts() {
+    let _watchdog = watchdog(BUDGET);
+    within(
+        "root_exit_terminates_descendants_after_into_parts",
+        DEADLINE,
+        async {
+            const MARKER: &str = "root-watcher-tokio-tail";
+
+            let mut session = Command::new(ROOT_EXE)
+                .args(["/d", "/q"])
+                .spawn()
+                .expect("managed spawning must succeed");
+            let root = session.id();
+            session
+                .write_all(
+                    format!(
+                        "start \"\" /b ping -t 127.0.0.1 >nul & echo {MARKER} & ping -n 3 127.0.0.1 >nul & exit /b 23\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("the root command must reach the session");
+
+            let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR).await;
+            let parts = session.into_parts();
+            let mut child = parts.child;
+            let mut output = parts.output;
+            let input = parts.input;
+            let controller = parts.controller;
+            let reader = tokio::spawn(async move {
+                let mut bytes = Vec::new();
+                output
+                    .read_to_end(&mut bytes)
+                    .await
+                    .expect("output must reach EOF after root exit");
+                bytes
+            });
+
+            let status = child.wait().await.expect("root wait must succeed");
+            assert_eq!(status.code(), 23);
+            assert_tree_terminated(root, grandchild).await;
+
+            let bytes = reader
+                .await
+                .expect("the output reader task must not panic");
+            assert!(
+                String::from_utf8_lossy(&bytes).contains(MARKER),
+                "the root's final output must survive watcher teardown"
+            );
+
+            let resize = controller
+                .resize(Size::default())
+                .expect_err("resize after root teardown must fail");
+            assert_eq!(resize.kind(), ErrorKind::Resize);
+            assert_eq!(
+                resize.io_error().expect("resize retains its I/O source").kind(),
+                io::ErrorKind::NotConnected
+            );
+
+            let clear = controller
+                .clear()
+                .expect_err("clear after root teardown must fail");
+            if controller.supports_clear() {
+                assert_eq!(clear.kind(), ErrorKind::Clear);
+                assert_eq!(
+                    clear.io_error().expect("clear retains its I/O source").kind(),
+                    io::ErrorKind::NotConnected
+                );
+            } else {
+                assert_eq!(clear.kind(), ErrorKind::UnsupportedFeature);
+            }
+
+            drop(input);
+            drop(controller);
         },
     )
     .await;

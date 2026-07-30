@@ -48,7 +48,7 @@ const CONCURRENT_ROUNDS: u16 = 12;
 const CLOSE_RACE_BUDGET: Duration = Duration::from_secs(10);
 
 fn size(rows: u16, cols: u16) -> Size {
-    Size::try_new(rows, cols).expect("test dimensions must be valid")
+    Size::try_new(cols, rows).expect("test dimensions must be valid")
 }
 
 /// The escape character that introduces every ANSI sequence.
@@ -167,7 +167,7 @@ async fn an_interactive_session_ends_when_the_shell_exits() {
 /// A resize is visible to the program running inside the session.
 ///
 /// `ResizePseudoConsole` takes a `COORD` of `(X = columns, Y = rows)`, the
-/// mirror image of the crate's own `Size`, and a swapped pair still succeeds —
+/// same order as `Size::try_new`, and a swapped pair still succeeds —
 /// so nothing but asking the child what size it thinks it has can catch it.
 /// `mode con` is that question, and both dimensions are checked from the same
 /// reply.

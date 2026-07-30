@@ -18,7 +18,7 @@ use crate::size::Size;
 /// Builder for a [`Pty`].
 ///
 /// Created by [`Pty::builder`]. Every option has a working default, so
-/// `Pty::builder().build()` is a complete 24x80 session using automatic
+/// `Pty::builder().build()` is a complete 80x24 session using automatic
 /// backend selection.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PtyBuilder {

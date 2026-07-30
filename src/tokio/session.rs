@@ -19,15 +19,14 @@ use super::{Child, OwnedReadHalf, OwnedWriteHalf};
 
 /// A managed asynchronous pseudoconsole session.
 ///
-/// There is deliberately no `wait` method: waiting without draining output
-/// can deadlock once the pipe fills. Use [`Session::collect_output`] after
-/// arranging for the root process to exit, or [`Session::into_parts`] for
-/// independently coordinated I/O and waiting.
+/// [`Session::wait`] drains and discards output concurrently, while
+/// [`Session::collect_output`] retains it. Use [`Session::into_parts`] for
+/// interactive or externally coordinated I/O.
 ///
 /// The managed child always has kill-on-drop and Job kill-on-close enabled.
 /// Dropping an unfinished `Session` therefore terminates the root process and
 /// every descendant. The same guarantee applies when a future that owns the
-/// session—most notably [`Session::collect_output`]—is cancelled.
+/// session—most notably [`Session::wait`] or [`Session::collect_output`]—is cancelled.
 pub struct Session {
     pub(super) child: Child,
     pub(super) output: OwnedReadHalf,
@@ -105,6 +104,26 @@ impl Session {
     pub fn supports_clear(&self) -> bool {
         self.controller.supports_clear()
     }
+    /// Waits for the root process while draining and discarding VT output.
+    ///
+    /// Output and the root wait are polled concurrently. Once the root status
+    /// is saved, remaining descendants are terminated and the teardown tail is
+    /// drained to EOF without allocating an output-sized buffer.
+    ///
+    /// The future owns the session. Cancelling it drops the managed child and
+    /// terminates the process tree.
+    ///
+    /// Terminal input remains open until the root exits. Input shutdown is
+    /// session teardown, not an ordinary stdin EOF signal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if output cannot be drained, the root process status
+    /// cannot be obtained, or the remaining process tree cannot be
+    /// terminated.
+    pub async fn wait(self) -> Result<ExitStatus> {
+        Ok(self.complete(false).await?.status())
+    }
 
     /// Waits for the root process while collecting the remaining VT output.
     ///
@@ -123,15 +142,23 @@ impl Session {
     /// owns the whole session; cancelling it drops the managed child first and
     /// terminates the process tree.
     ///
+    /// Collection is unbounded and may allocate as much memory as the child
+    /// writes. Use [`Session::wait`] when output is unnecessary, or
+    /// [`Session::into_parts`] to process it as a stream.
+    ///
     /// # Errors
     ///
     /// Returns an error if output cannot be drained, the root process status
     /// cannot be obtained, or the remaining process tree cannot be
     /// terminated.
-    pub async fn collect_output(mut self) -> Result<SessionOutput> {
+    pub async fn collect_output(self) -> Result<SessionOutput> {
+        self.complete(true).await
+    }
+
+    async fn complete(mut self, collect: bool) -> Result<SessionOutput> {
         let mut bytes = Vec::new();
         let (status, output_finished) =
-            collect_until_root(&mut self.child, &mut self.output, &mut bytes).await?;
+            collect_until_root(&mut self.child, &mut self.output, &mut bytes, collect).await?;
 
         // The root status is cached before this call, so terminating the Job
         // now affects only descendants that outlived it.
@@ -153,7 +180,7 @@ impl Session {
         let output_result = if output_finished {
             Ok(())
         } else {
-            drain_to_end(&mut output, &mut bytes).await
+            drain_to_end(&mut output, &mut bytes, collect).await
         };
         output_result?;
         input_result?;
@@ -163,6 +190,9 @@ impl Session {
 
     /// Decomposes this session for interactive or externally coordinated I/O.
     #[must_use]
+    /// Splitting changes ownership only: root exit still terminates remaining
+    /// descendants and advances output to EOF. It does not detach the session.
+    ///
     pub fn into_parts(self) -> SessionParts {
         SessionParts {
             child: self.child,
@@ -182,6 +212,7 @@ async fn collect_until_root(
     child: &mut Child,
     output: &mut OwnedReadHalf,
     bytes: &mut Vec<u8>,
+    collect: bool,
 ) -> Result<(ExitStatus, bool)> {
     // Keep the returned public future small enough to live comfortably in an
     // executor task. This fixed buffer is backpressure plumbing, not a
@@ -213,7 +244,10 @@ async fn collect_until_root(
         match event {
             CollectionEvent::Root(status) => break status?,
             CollectionEvent::Output(Ok(0)) => output_finished = true,
-            CollectionEvent::Output(Ok(read)) => bytes.extend_from_slice(&chunk[..read]),
+            CollectionEvent::Output(Ok(read)) if collect => {
+                bytes.extend_from_slice(&chunk[..read]);
+            },
+            CollectionEvent::Output(Ok(_read)) => {},
             CollectionEvent::Output(Err(err)) => return Err(err.into()),
         }
     };
@@ -221,7 +255,11 @@ async fn collect_until_root(
     Ok((status, output_finished))
 }
 
-async fn drain_to_end(output: &mut OwnedReadHalf, bytes: &mut Vec<u8>) -> io::Result<()> {
+async fn drain_to_end(
+    output: &mut OwnedReadHalf,
+    bytes: &mut Vec<u8>,
+    collect: bool,
+) -> io::Result<()> {
     let mut chunk = [0_u8; 4096];
     loop {
         let read = std::future::poll_fn(|cx| {
@@ -236,7 +274,9 @@ async fn drain_to_end(output: &mut OwnedReadHalf, bytes: &mut Vec<u8>) -> io::Re
         if read == 0 {
             return Ok(());
         }
-        bytes.extend_from_slice(&chunk[..read]);
+        if collect {
+            bytes.extend_from_slice(&chunk[..read]);
+        }
     }
 }
 

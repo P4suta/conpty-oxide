@@ -65,7 +65,7 @@ const ANSWER: Duration = Duration::from_secs(15);
 const SETTLE: Duration = Duration::from_secs(10);
 
 fn size(rows: u16, cols: u16) -> Size {
-    Size::try_new(rows, cols).expect("test dimensions must be valid")
+    Size::try_new(cols, rows).expect("test dimensions must be valid")
 }
 
 /// The directory the suite was pointed at, if any.

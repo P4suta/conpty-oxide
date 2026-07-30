@@ -61,15 +61,15 @@
 #![cfg_attr(
     feature = "blocking",
     doc = "[`blocking`] holds the synchronous API. Start a managed session with",
-    doc = "[`blocking::Command::spawn`], then use",
-    doc = "[`blocking::Session::collect_output`] for root-bounded collection or",
-    doc = "[`blocking::Session::into_parts`] for independently owned I/O, child,",
-    doc = "and control handles.",
+    doc = "[`blocking::Command::spawn`], then choose [`blocking::Session::wait`]",
+    doc = "when output is unnecessary, [`blocking::Session::collect_output`] to",
+    doc = "retain raw VT, or [`blocking::Session::into_parts`] for independently",
+    doc = "owned I/O, child, and control handles.",
     doc = ""
 )]
 #![cfg_attr(
     feature = "tokio",
-    doc = "The [`tokio`] module mirrors that API with `AsyncRead`/`AsyncWrite`",
+    doc = "The [`tokio`] module mirrors all three paths with `AsyncRead`/`AsyncWrite`",
     doc = "streams and registered process waits. Frontend types never change meaning",
     doc = "based on the selected feature: choose `blocking` or `tokio` explicitly.",
     doc = ""
@@ -81,6 +81,18 @@
     doc = ""
 )]
 //! # Choosing a `ConPTY` implementation
+//! # Managed sessions
+//!
+//! A managed session is bounded by its root process. Once the root's real exit
+//! status is saved, descendants remaining in the session Job are terminated
+//! and the output tail proceeds to EOF. Splitting with `into_parts` changes
+//! ownership only; it does not detach the process tree.
+//!
+//! Input drop or shutdown ends the terminal session rather than delivering an
+//! ordinary stdin EOF. Output is one raw UTF-8/VT byte stream with no separate
+//! stdout and stderr channels. `collect_output` retains an unbounded amount of
+//! output; use `wait` to discard it safely or owned parts to stream it.
+//!
 //!
 //! Automatic selection needs no setup: it prefers a validated standalone
 //! `conpty.dll` bundle next to the executable, then falls back to the operating
