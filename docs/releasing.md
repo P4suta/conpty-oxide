@@ -51,9 +51,11 @@ For each release:
    the published-package job, to pass on that exact commit.
 5. Inspect `cargo package --list --locked` once more for secrets, generated
    files, or missing documentation.
-6. Create and push the `v0.1.0` tag.
-7. Publish with `cargo publish --locked`.
-8. Confirm that docs.rs built the tagged version with all features and both
+6. Publish with `cargo publish --locked`, then confirm that the version is
+   visible on crates.io before creating an immutable tag.
+7. Create and push the `v0.1.0` tag for the exact release commit that produced
+   the published package.
+8. Confirm that docs.rs built the published version with all features and both
    documented Windows targets. Open several API pages rather than relying only
    on the green build indicator.
 9. Build small blocking and Tokio consumers against the registry release and
