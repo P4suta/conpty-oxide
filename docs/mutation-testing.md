@@ -56,7 +56,14 @@ Direct tests now observe each of those behaviours without timing races. A
 current-tree rerun of the affected and adjacent candidates exercised 20
 mutants: 18 were caught, two replacement values did not compile, and none
 survived or timed out. The exact equivalent expressions are excluded narrowly;
-the current candidate list contains 624 mutations.
+none of those exclusions cover the output collectors.
+
+The final root-bounded collector change added ten focused candidates. Four
+were caught and five replacement values did not compile. Replacing Tokio's
+post-root tail drain with a no-op initially survived; a completed-root fixture
+now requires buffered VT bytes to be returned, and a focused rerun caught both
+tail-drain mutations. No collector mutation survives or times out. The current
+candidate list contains 629 mutations.
 
 ## Equivalent mutations
 

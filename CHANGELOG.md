@@ -16,14 +16,16 @@ with Cargo's additional pre-1.0 compatibility rules.
 
 ### Added
 
-- A managed blocking API for creating, controlling, waiting on, and collecting
-  output from Windows pseudoconsole sessions.
+- A managed blocking API for creating, controlling, and collecting output from
+  Windows pseudoconsole sessions.
 - A symmetric Tokio API with cancellation-safe managed session ownership and
   asynchronous named-pipe I/O.
+- Root-bounded output collection that drains while the root runs, preserves its
+  real exit status, and terminates descendants that outlive it.
 - Process-tree termination through a Job object assigned atomically at child
   creation.
-- Consistent end-of-file and teardown behavior on Windows 10 1809 through
-  current Windows releases.
+- Consistent collection, end-of-file, and teardown behavior on Windows 10 1809
+  through current Windows releases.
 - Validated loading of a paired `conpty.dll` and `OpenConsole.exe`, plus
   capability detection for optional release and clear operations.
 - Public API snapshots, MSRV and architecture gates, external-DLL tests, and

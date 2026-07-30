@@ -35,7 +35,7 @@ mod blocking {
             .expect("managed spawning with explicit options must succeed");
         assert_eq!(session.size(), size(29, 91));
         let output = session
-            .wait_with_output()
+            .collect_output()
             .expect("managed output collection must succeed");
 
         assert!(output.status().success());
@@ -83,7 +83,7 @@ mod blocking {
             .kill()
             .expect("killing the managed tree must succeed");
         let output = session
-            .wait_with_output()
+            .collect_output()
             .expect("a killed managed session must drain and finish");
         assert_eq!(output.status().code(), 1);
     }
@@ -150,7 +150,7 @@ mod asynchronous {
             .kill()
             .expect("killing the managed tree must succeed");
         let output = session
-            .wait_with_output()
+            .collect_output()
             .await
             .expect("a killed managed session must drain and finish");
         assert_eq!(output.status().code(), 1);

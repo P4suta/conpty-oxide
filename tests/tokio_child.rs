@@ -28,6 +28,7 @@ pub mod helpers;
 use std::time::Duration;
 
 use conpty_oxide::tokio::Command;
+use tokio::io::AsyncWriteExt;
 
 use helpers::tokio_support::{poll_until, wait_for_descendant, within, Session};
 use helpers::{process_is_running, watchdog};
@@ -205,7 +206,7 @@ async fn cancelling_managed_output_collection_terminates_the_whole_tree() {
             let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR).await;
 
             assert!(
-                tokio::time::timeout(Duration::from_millis(50), session.wait_with_output())
+                tokio::time::timeout(Duration::from_millis(50), session.collect_output())
                     .await
                     .is_err(),
                 "the never-ending tree must still be collecting when cancelled"
@@ -213,6 +214,47 @@ async fn cancelling_managed_output_collection_terminates_the_whole_tree() {
             assert_tree_terminated(root, grandchild).await;
         },
     ))
+    .await;
+}
+
+#[tokio::test]
+async fn collecting_output_is_bounded_by_the_root_process() {
+    let _watchdog = watchdog(BUDGET);
+    within(
+        "collecting_output_is_bounded_by_the_root_process",
+        DEADLINE,
+        async {
+            const MARKER: &str = "root-bounded-tokio-tail";
+
+            let mut session = Command::new(ROOT_EXE)
+                .args(["/d", "/q"])
+                .spawn()
+                .expect("managed spawning must succeed");
+            let root = session.id();
+            session
+                .write_all(
+                    format!(
+                        "start \"\" /b ping -t 127.0.0.1 >nul & echo {MARKER} & exit /b 23\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("the root command must reach the session");
+
+            let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR).await;
+            let output = session
+                .collect_output()
+                .await
+                .expect("root-bounded collection must complete");
+
+            assert_eq!(output.status().code(), 23);
+            assert!(
+                String::from_utf8_lossy(output.as_bytes()).contains(MARKER),
+                "the root's teardown tail must be preserved"
+            );
+            assert_tree_terminated(root, grandchild).await;
+        },
+    )
     .await;
 }
 

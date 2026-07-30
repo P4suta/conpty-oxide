@@ -234,18 +234,22 @@ fn building_with_a_disabled_io_driver_is_an_error() {
     );
 }
 
-#[test]
-fn managed_output_future_stays_below_clippys_stack_threshold() {
+#[tokio::test]
+async fn managed_output_future_stays_below_clippys_stack_threshold() {
     const LARGE_FUTURE_THRESHOLD: usize = 16 * 1024;
 
-    let mut command = Command::new("cmd.exe");
-    let future = command.output();
+    let session = Command::new("cmd.exe")
+        .args(["/d", "/c", "exit", "0"])
+        .spawn()
+        .expect("managed spawning must succeed");
+    let future = session.collect_output();
     let bytes = size_of_val(&future);
     assert!(
         bytes < LARGE_FUTURE_THRESHOLD,
-        "Command::output() is {bytes} bytes; keep it below Clippy's \
+        "Session::collect_output() is {bytes} bytes; keep it below Clippy's \
          {LARGE_FUTURE_THRESHOLD}-byte large-future threshold without boxing"
     );
+    future.await.expect("managed collection must complete");
 }
 
 /// `Debug` output ends up in logs and bug reports, so it must show a
@@ -366,7 +370,7 @@ async fn managed_session_reports_the_configured_bundle_clear_capability() {
 
     assert!(session.supports_clear());
     assert!(session
-        .wait_with_output()
+        .collect_output()
         .await
         .expect("the managed session must finish")
         .status()
@@ -905,7 +909,9 @@ async fn managed_output_drains_more_than_pipe_capacity() {
                 "/c",
                 "for /L %i in (1,1,6000) do @echo managed-output-%i-01234567890123456789",
             ])
-            .output(),
+            .spawn()
+            .expect("managed spawning must succeed")
+            .collect_output(),
     ))
     .await
     .expect("managed output must complete");
@@ -940,11 +946,58 @@ async fn managed_output_keeps_input_open_until_the_real_exit() {
         "managed_output_keeps_input_open",
         Command::new("cmd.exe")
             .raw_arg(r#"/d /q /c "ping -n 2 127.0.0.1 >nul & exit 42""#)
-            .output(),
+            .spawn()
+            .expect("managed spawning must succeed")
+            .collect_output(),
     ))
     .await
     .expect("managed output must complete");
     assert_eq!(output.status().code(), 42);
+}
+
+async fn assert_root_bounded_collection(backend: ConPtyBackend) {
+    const MARKER: &str = "tokio-root-bounded-tail";
+
+    let options = crate::SessionOptions::new().backend(backend);
+    let mut session = Command::new("cmd.exe")
+        .args(["/d", "/q"])
+        .spawn_with(options)
+        .expect("managed spawning must succeed");
+    session
+        .write_all(
+            format!("start \"\" /b ping -t 127.0.0.1 >nul & echo {MARKER} & exit /b 23\r\n")
+                .as_bytes(),
+        )
+        .await
+        .expect("the root command must reach the session");
+
+    let output = session
+        .collect_output()
+        .await
+        .expect("root-bounded collection must finish");
+    assert_eq!(output.status().code(), 23);
+    assert!(
+        String::from_utf8_lossy(output.as_bytes()).contains(MARKER),
+        "the root's teardown tail must be preserved"
+    );
+}
+
+#[tokio::test]
+async fn managed_collection_has_the_same_root_boundary_on_both_lifecycles() {
+    complete_within("managed_collection_root_boundary", async {
+        let system = ConPtyBackend::system().expect("ConPTY must be available");
+        assert_root_bounded_collection(system.without_release()).await;
+        assert_root_bounded_collection(system).await;
+
+        #[cfg(not(target_arch = "x86"))]
+        if let Some(dir) = std::env::var_os("CONPTY_OXIDE_TEST_DLL_DIR") {
+            let bundle =
+                ConPtyBackend::from_dir(dir).expect("the configured standalone backend must load");
+            assert!(bundle.supports_release());
+            assert_root_bounded_collection(bundle).await;
+        }
+    })
+    .await;
 }
 
 #[test]
@@ -975,7 +1028,13 @@ fn command_builder_delegates_every_configuration_category() {
         .build()
         .expect("building the test runtime must succeed");
     let output = runtime
-        .block_on(command.output())
+        .block_on(async {
+            command
+                .spawn()
+                .expect("managed spawning must succeed")
+                .collect_output()
+                .await
+        })
         .expect("the fully configured command must complete");
     assert!(output.status().success());
     let text = String::from_utf8_lossy(output.as_bytes());
@@ -1099,8 +1158,9 @@ async fn low_level_pty_and_borrowed_halves_delegate_io() {
 
 #[tokio::test]
 async fn managed_session_try_wait_reports_a_completed_child() {
+    const MARKER: &str = "tokio-completed-root-tail";
     let mut session = Command::new("cmd.exe")
-        .args(["/c", "exit", "23"])
+        .raw_arg(format!(r#"/d /q /c "echo {MARKER} & exit /b 23""#))
         .spawn()
         .expect("managed spawning must succeed");
     let expected = complete_within("managed_session_child_completion", session.child.wait())
@@ -1116,11 +1176,15 @@ async fn managed_session_try_wait_reports_a_completed_child() {
 
     let output = complete_within(
         "managed_session_try_wait_teardown",
-        session.wait_with_output(),
+        session.collect_output(),
     )
     .await
     .expect("draining the completed managed session must succeed");
     assert_eq!(output.status(), expected);
+    assert!(
+        String::from_utf8_lossy(output.as_bytes()).contains(MARKER),
+        "output buffered after root completion must still be drained"
+    );
 }
 
 #[tokio::test]
@@ -1239,7 +1303,7 @@ async fn shutting_down_a_live_managed_session_retires_its_input() {
 }
 
 #[tokio::test]
-async fn cancelling_wait_with_output_kills_the_managed_tree() {
+async fn cancelling_collect_output_kills_the_managed_tree() {
     let session = Command::new("cmd.exe")
         .spawn()
         .expect("managed spawn must succeed");
@@ -1252,7 +1316,7 @@ async fn cancelling_wait_with_output_kills_the_managed_tree() {
     );
 
     assert!(
-        ::tokio::time::timeout(Duration::from_millis(50), session.wait_with_output())
+        ::tokio::time::timeout(Duration::from_millis(50), session.collect_output())
             .await
             .is_err(),
         "the interactive child must still be running when collection is cancelled"

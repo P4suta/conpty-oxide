@@ -23,7 +23,8 @@ use conpty_oxide::Result;
 fn main() -> Result<()> {
     let output = Command::new("cmd.exe")
         .args(["/c", "echo", "hello"])
-        .output()?;
+        .spawn()?
+        .collect_output()?;
 
     io::stdout().write_all(output.as_bytes())?;
     io::stdout().flush()?;

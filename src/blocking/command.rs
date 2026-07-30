@@ -15,7 +15,7 @@ use crate::core::child::ChildCore;
 use crate::core::session;
 use crate::error::Result;
 use crate::status::ExitStatus;
-use crate::{SessionOptions, SessionOutput};
+use crate::SessionOptions;
 
 /// A command to run inside a pseudoconsole.
 ///
@@ -194,17 +194,6 @@ impl Command {
         let controller = pty.controller();
         let (output, input) = pty.into_split();
         Ok(Session::new(child, output, input, controller))
-    }
-
-    /// Runs the command in a managed session and collects its complete VT
-    /// output.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if session creation, process spawning, output
-    /// draining, or process waiting fails.
-    pub fn output(&mut self) -> Result<SessionOutput> {
-        self.spawn()?.wait_with_output()
     }
 
     /// Spawns the command as the root child of an existing low-level `pty`.
