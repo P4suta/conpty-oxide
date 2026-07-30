@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+---
+name: Feature request
+description: Propose a concrete use case or API improvement
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Version 0.1 intentionally centers managed Windows blocking and Tokio
+        sessions. Advanced lifecycle controls need a concrete use case and a
+        safety story before they become public API.
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Describe the application and what cannot be done with the current API.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior or API
+      description: Show a small call-site sketch if an API change is involved.
+    validations:
+      required: true
+  - type: textarea
+    id: lifecycle
+    attributes:
+      label: Ownership and lifecycle considerations
+      description: Explain EOF, cancellation, drop order, child trees, and Windows-version effects.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and the documented 0.1 exclusions.
+          required: true
+        - label: This request is specific to Windows ConPTY behavior.
+          required: true

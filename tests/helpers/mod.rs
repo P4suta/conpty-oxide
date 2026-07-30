@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Shared harness for the integration tests.
 //!
 //! The tests in this directory all guard against the same failure mode: a
@@ -17,16 +21,13 @@
 //!
 //! Everything specific to one front end lives in a submodule, so a test binary
 //! built with only one of them compiles: the blocking session harness is
-//! re-exported from here (`helpers::Session`, `helpers::pty`, ...) and the
-//! asynchronous one is reached through [`asyn`] (`helpers::asyn::Session`,
-//! `helpers::asyn::pty`, ...).
-
-// Every test binary compiles this whole module but uses only the part it
-// needs, so unused items here are expected rather than a mistake.
-#![allow(dead_code)]
+//! reached through [`sync`] (`helpers::sync::Session`,
+//! `helpers::sync::pty`, ...) and the asynchronous one through
+//! [`tokio_support`] (`helpers::tokio_support::Session`,
+//! `helpers::tokio_support::pty`, ...).
 
 use std::io::{self, Write};
-use std::mem;
+use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,18 +43,13 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 use conpty_oxide::Size;
 
 #[cfg(feature = "blocking")]
-mod sync;
-// Same reasoning as the `dead_code` allowance above: a test binary that only
-// exercises one front end still compiles the harness for both.
-#[cfg(feature = "blocking")]
-#[allow(unused_imports)]
-pub use sync::*;
+pub mod sync;
 
 #[cfg(feature = "tokio")]
-pub mod asyn;
+pub mod tokio_support;
 
 /// How often the watchdog and the polling helpers re-check their condition.
-pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(25);
+pub const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Exit code used when a test exceeds its budget.
 ///
@@ -87,9 +83,13 @@ impl Drop for Watchdog {
 /// which is the whole value of these tests in CI.
 ///
 /// Async tests hold the guard for the whole test function and use
-/// [`asyn::within`] for the ordinary, recoverable timeout. The two are
+/// [`tokio_support::within`] for the ordinary, recoverable timeout. The two are
 /// complementary: `tokio::time::timeout` cannot fire while a blocked
 /// destructor is occupying the runtime thread, and this can.
+///
+/// # Panics
+///
+/// If the watchdog thread cannot be created.
 pub fn watchdog(limit: Duration) -> Watchdog {
     let finished = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&finished);
@@ -161,7 +161,7 @@ pub fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool 
 ///
 /// A poisoned buffer in a test is still perfectly readable, and the panic that
 /// poisoned it is what the harness should report — not a second panic here.
-pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -172,6 +172,7 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// updates. Those would otherwise both hide the text (a line can be split by a
 /// reposition) and inject stray digits into it, which matters when a test
 /// parses a number out of the output.
+#[must_use]
 pub fn strip_escapes(text: &str) -> String {
     const ESC: char = '\u{1b}';
     const BEL: char = '\u{7}';
@@ -190,7 +191,7 @@ pub fn strip_escapes(text: &str) -> String {
             Some('[') => loop {
                 match chars.next() {
                     Some('\u{40}'..='\u{7e}') | None => break,
-                    Some(_) => {}
+                    Some(_) => {},
                 }
             },
             // String sequences (OSC, DCS, SOS, PM, APC): everything up to a
@@ -201,12 +202,12 @@ pub fn strip_escapes(text: &str) -> String {
                     Some(ESC) => {
                         chars.next();
                         break;
-                    }
-                    Some(_) => {}
+                    },
+                    Some(_) => {},
                 }
             },
             // Two-character sequence: the second character completes it.
-            Some(_) | None => {}
+            Some(_) | None => {},
         }
     }
 }
@@ -223,6 +224,7 @@ pub fn strip_escapes(text: &str) -> String {
 /// host repaint the viewport, which re-emits the previous answer verbatim, so
 /// only the last occurrence of each label is guaranteed to belong to the reply
 /// to the last question.
+#[must_use]
 pub fn reported_size(raw: &str) -> Option<(u32, u32)> {
     let text = strip_escapes(raw);
     Some((
@@ -243,14 +245,17 @@ fn last_number(text: &str, label: &str) -> Option<u32> {
 }
 
 /// The pair [`reported_size`] must return once `size` has taken effect.
-pub fn expected_size(size: Size) -> Option<(u32, u32)> {
-    Some((u32::from(size.rows()), u32::from(size.cols())))
+#[must_use]
+pub fn expected_size(size: Size) -> (u32, u32) {
+    (u32::from(size.rows()), u32::from(size.cols()))
 }
 
 /// One entry of a process snapshot.
 #[derive(Debug, Clone)]
 pub struct ProcessEntry {
+    /// Process identifier from the snapshot.
     pub pid: u32,
+    /// Identifier of this process's parent.
     pub parent_pid: u32,
     /// Image name, e.g. `ping.exe`.
     pub name: String,
@@ -273,11 +278,13 @@ const SNAPSHOT_ATTEMPTS: u32 = 20;
 /// If `CreateToolhelp32Snapshot` keeps failing. It fails transiently with
 /// `ERROR_BAD_LENGTH` when the process list changes mid-capture, which is
 /// documented as retryable, so only a persistent failure aborts.
+#[must_use]
 pub fn process_snapshot() -> Vec<ProcessEntry> {
     let snapshot = open_process_snapshot();
     let handle = snapshot.as_raw_handle() as HANDLE;
     let mut entry = PROCESSENTRY32W {
-        dwSize: mem::size_of::<PROCESSENTRY32W>() as u32,
+        dwSize: u32::try_from(size_of::<PROCESSENTRY32W>())
+            .expect("PROCESSENTRY32W size must fit in a DWORD"),
         ..Default::default()
     };
 
@@ -330,6 +337,7 @@ fn wide_to_string(wide: &[u16]) -> String {
 /// a recycled identifier could in principle attach an unrelated process to the
 /// tree. Over the lifetime of one test, with a process this crate created
 /// moments ago, that cannot happen.
+#[must_use]
 pub fn descendants_of(root: u32) -> Vec<ProcessEntry> {
     let all = process_snapshot();
     let mut found: Vec<ProcessEntry> = Vec::new();
@@ -348,6 +356,7 @@ pub fn descendants_of(root: u32) -> Vec<ProcessEntry> {
 }
 
 /// Returns a descendant of `root` whose image name is `exe`, if there is one.
+#[must_use]
 pub fn find_descendant(root: u32, exe: &str) -> Option<ProcessEntry> {
     descendants_of(root).into_iter().find(|entry| entry.is(exe))
 }
@@ -357,6 +366,7 @@ pub fn find_descendant(root: u32, exe: &str) -> Option<ProcessEntry> {
 /// # Panics
 ///
 /// If no such descendant appears within `limit`.
+#[must_use]
 pub fn wait_for_descendant(root: u32, exe: &str, limit: Duration) -> u32 {
     let mut found = None;
     let appeared = wait_until(limit, || {
@@ -375,6 +385,7 @@ pub fn wait_for_descendant(root: u32, exe: &str, limit: Duration) -> u32 {
 /// Matching the name as well as the identifier keeps a recycled pid from
 /// masquerading as a survivor, which would turn a correct "kill tree" into a
 /// flaky failure.
+#[must_use]
 pub fn process_is_running(pid: u32, exe: &str) -> bool {
     process_snapshot()
         .iter()

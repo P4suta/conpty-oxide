@@ -1,8 +1,11 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Session harness for the blocking front end.
 //!
-//! Re-exported from the parent module, so tests keep saying `helpers::Session`
-//! and `helpers::pty`. It lives in its own file only so that a test binary
-//! built without the `blocking` feature still compiles.
+//! Reached through `helpers::sync`; it lives in its own file so that a test
+//! binary built without the `blocking` feature still compiles.
 //!
 //! - [`OutputCollector`] provides the dedicated reader thread ConPTY requires,
 //!   while still letting the test thread inspect what has arrived so far.
@@ -16,43 +19,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use conpty_oxide::blocking::{Child, Command, OwnedReadHalf, OwnedWriteHalf, Pty, PtyController};
-use conpty_oxide::{ConPtyBackend, ExitStatus, Size};
+use conpty_oxide::blocking::{Child, Command, OwnedReadHalf, OwnedWriteHalf};
+use conpty_oxide::{ExitStatus, PtyController, SessionOptions};
 
 use super::{lock, strip_escapes, wait_until};
-
-/// Builds a default 24x80 session.
-pub fn pty() -> Pty {
-    Pty::builder().build().expect("building a pty must succeed")
-}
-
-/// Builds a session of the given size.
-pub fn pty_with_size(size: Size) -> Pty {
-    Pty::builder()
-        .size(size)
-        .build()
-        .expect("building a pty must succeed")
-}
-
-/// Builds a default 24x80 session forced onto the legacy shutdown path.
-///
-/// The backend clone has its `ReleasePseudoConsole` export stripped
-/// (`ConPtyBackend::without_release`, a hidden test hook), so the session
-/// behaves as on Windows versions before 11 24H2 regardless of the machine it
-/// runs on: the console host outlives the child, and only the crate's own
-/// legacy shutdown (the watcher, or closing the console at teardown) can
-/// produce end-of-file. Tests built on this cover the code paths that a
-/// 24H2+ machine would otherwise never take.
-pub fn legacy_pty() -> Pty {
-    let backend = ConPtyBackend::system()
-        .expect("ConPTY must be available")
-        .without_release();
-    assert!(!backend.supports_release());
-    Pty::builder()
-        .backend(backend)
-        .build()
-        .expect("building a forced-legacy pty must succeed")
-}
 
 /// Drains a session's output on its own thread and accumulates it.
 ///
@@ -69,6 +39,11 @@ pub struct OutputCollector {
 
 impl OutputCollector {
     /// Starts draining `half` until end-of-file.
+    ///
+    /// # Panics
+    ///
+    /// If the collector thread cannot be created.
+    #[must_use]
     pub fn spawn(mut half: OwnedReadHalf) -> Self {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&buffer);
@@ -92,6 +67,7 @@ impl OutputCollector {
     ///
     /// Safe to call while the child is still running; that is what makes
     /// request/response tests possible.
+    #[must_use]
     pub fn text(&self) -> String {
         String::from_utf8_lossy(&lock(&self.buffer)).into_owned()
     }
@@ -117,6 +93,11 @@ impl OutputCollector {
     ///
     /// This is the strongest assertion the harness makes: it returns only once
     /// the crate's own shutdown path has produced end-of-file.
+    ///
+    /// # Panics
+    ///
+    /// If the collector thread panics, reading fails, or its buffer still has
+    /// another owner after the thread exits.
     pub fn join(self) -> Vec<u8> {
         let Self { buffer, reader } = self;
         reader
@@ -132,6 +113,7 @@ impl OutputCollector {
     }
 
     /// [`Self::join`], decoded lossily.
+    #[must_use]
     pub fn join_text(self) -> String {
         String::from_utf8_lossy(&self.join()).into_owned()
     }
@@ -143,35 +125,48 @@ impl OutputCollector {
 /// The fields are public so a test can take the session apart and drop the
 /// pieces in whatever order it wants to exercise.
 pub struct Session {
+    /// Root child attached to the pseudoconsole.
     pub child: Child,
+    /// Thread-backed collector draining rendered output.
     pub output: OutputCollector,
     /// Kept open on purpose. Closing the input pipe makes the console host
     /// send a close event to every client, which terminates the child with
     /// `0xC000013A` and truncates its output — a test that dropped this early
     /// would observe a broken pipe no matter how the crate behaved.
     pub writer: OwnedWriteHalf,
+    /// Cloneable control handle for the session.
     pub controller: PtyController,
 }
 
 impl Session {
     /// Spawns `command` in a fresh 24x80 session.
     pub fn start(command: &mut Command) -> Self {
-        Self::start_in(pty(), command)
+        Self::start_with(command, SessionOptions::default())
     }
 
-    /// Spawns `command` in `pty` and starts draining its output.
-    pub fn start_in(pty: Pty, command: &mut Command) -> Self {
-        let child = command.spawn(&pty).expect("spawning must succeed");
-        let (reader, writer, controller) = pty.into_split();
+    /// Spawns `command` with managed options and starts draining its output.
+    ///
+    /// # Panics
+    ///
+    /// If the child or output collector cannot be started.
+    pub fn start_with(command: &mut Command, options: SessionOptions) -> Self {
+        let parts = command
+            .spawn_with(options)
+            .expect("spawning must succeed")
+            .into_parts();
         Self {
-            child,
-            output: OutputCollector::spawn(reader),
-            writer,
-            controller,
+            child: parts.child,
+            output: OutputCollector::spawn(parts.output),
+            writer: parts.input,
+            controller: parts.controller,
         }
     }
 
     /// Types `line` followed by a carriage return, as a terminal would.
+    ///
+    /// # Panics
+    ///
+    /// If writing or flushing console input fails.
     pub fn write_line(&mut self, line: &str) {
         self.writer
             .write_all(line.as_bytes())
@@ -184,6 +179,7 @@ impl Session {
 
     /// Waits for the child, then for end-of-file, and returns the rendered
     /// output with escape sequences removed plus the child's status.
+    #[must_use]
     pub fn finish(self) -> (String, ExitStatus) {
         let (bytes, status) = self.finish_raw();
         (strip_escapes(&String::from_utf8_lossy(&bytes)), status)
@@ -191,6 +187,11 @@ impl Session {
 
     /// [`Self::finish`] without decoding or filtering, for tests that assert
     /// on the virtual-terminal stream itself.
+    ///
+    /// # Panics
+    ///
+    /// If waiting for the child or collecting its output fails.
+    #[must_use]
     pub fn finish_raw(self) -> (Vec<u8>, ExitStatus) {
         let Self {
             mut child,

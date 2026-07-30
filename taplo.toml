@@ -1,5 +1,9 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 include = ["**/*.toml"]
-exclude = ["target/**"]
+exclude = [".tools/**", "mutants.out*/**", "target/**"]
 
 [formatting]
 align_entries = false

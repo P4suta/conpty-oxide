@@ -1,6 +1,10 @@
-//! Correctness-first Windows ConPTY (pseudoconsole) library.
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Correctness-first Windows `ConPTY` (pseudoconsole) library.
 //!
-//! `conpty-oxide` wraps the Windows pseudoconsole (ConPTY) API with a focus on
+//! `conpty-oxide` wraps the Windows pseudoconsole (`ConPTY`) API with a focus on
 //! getting the hard parts right:
 //!
 //! - A well-defined EOF contract for the console output pipe.
@@ -13,6 +17,41 @@
 //! This crate targets Windows exclusively and does not compile on other
 //! platforms.
 //!
+//! Low-level lifecycle types are intentionally not part of the 0.1 contract:
+//!
+//! ```compile_fail
+//! use conpty_oxide::blocking::Pty;
+//! ```
+//!
+//! ```compile_fail
+//! use conpty_oxide::tokio::PtyBuilder;
+//! ```
+//!
+//! Backend identity and unchecked bundle loading are private implementation
+//! details:
+//!
+//! ```compile_fail
+//! use conpty_oxide::BackendKind;
+//! ```
+//!
+//! ```compile_fail
+//! let backend = conpty_oxide::ConPtyBackend::from_dir_unchecked(".");
+//! ```
+//!
+//! Errors are opaque and the result alias always uses this crate's error:
+//!
+//! ```compile_fail
+//! fn inspect(error: conpty_oxide::Error) {
+//!     match error {
+//!         conpty_oxide::Error::Io(_) => {}
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! type ForeignResult = conpty_oxide::Result<(), std::io::Error>;
+//! ```
+//!
 //! # Where to start
 //!
 // The two paragraphs below are feature-gated so their intra-doc links always
@@ -21,55 +60,57 @@
 // error rather than a dead link.
 #![cfg_attr(
     feature = "blocking",
-    doc = "[`blocking`] holds the synchronous API: build a [`blocking::Pty`], spawn a",
-    doc = "[`blocking::Command`] into it, and read the session's output from a",
-    doc = "dedicated thread. Its module documentation covers the two rules a",
-    doc = "pseudoconsole imposes on every caller — service the output pipe from",
-    doc = "another thread, and let the library decide when to close the console.",
+    doc = "[`blocking`] holds the synchronous API. The safe short path is",
+    doc = "[`blocking::Command::spawn`] for an interactive managed session or",
+    doc = "[`blocking::Command::output`] for complete VT output. Use",
+    doc = "[`blocking::Session::into_parts`] for independently owned I/O, child,",
+    doc = "and control handles.",
     doc = ""
 )]
 #![cfg_attr(
     feature = "tokio",
-    doc = "The `tokio` feature puts the same API at the crate root in asynchronous",
-    doc = "form: a [`Pty`] implements `AsyncRead`/`AsyncWrite`, [`Child::wait`] is a",
-    doc = "future, and the same rules apply to tasks instead of threads. The two",
-    doc = "front ends are independent — their types do not mix — and either can be",
-    doc = "compiled out. The [`asyn`] module documentation states the async",
-    doc = "lifecycle rules in full.",
+    doc = "The [`tokio`] module mirrors that API with `AsyncRead`/`AsyncWrite`",
+    doc = "streams and registered process waits. Frontend types never change meaning",
+    doc = "based on the selected feature: choose `blocking` or `tokio` explicitly.",
     doc = ""
 )]
 #![cfg_attr(
     not(feature = "tokio"),
     doc = "The `tokio` feature — not enabled in this build of the documentation —",
-    doc = "puts the same API at the crate root in asynchronous form: a `Pty` that",
-    doc = "implements `AsyncRead`/`AsyncWrite`, a `Child` whose `wait` is a future,",
-    doc = "and an `asyn` module stating the async lifecycle rules in full.",
+    doc = "adds a symmetric `conpty_oxide::tokio` frontend.",
     doc = ""
 )]
-//! # Choosing a ConPTY implementation
+//! # Choosing a `ConPTY` implementation
 //!
-//! Sessions run on the operating system's own ConPTY unless told otherwise,
-//! which needs no setup. An application that ships the standalone
-//! `conpty.dll` (the `Microsoft.Windows.Console.ConPTY` NuGet package) can get
-//! the newer console host's behaviour on older Windows versions instead:
+//! Automatic selection needs no setup: it prefers a validated standalone
+//! `conpty.dll` bundle next to the executable, then falls back to the operating
+//! system's `ConPTY`. An application can also select a bundle explicitly to get
+//! the newer console host's behaviour on older Windows versions:
 //!
-//! - [`ConPtyBackend::auto`] uses a bundle found next to the executable and
-//!   falls back to the system implementation, which is what most applications
-//!   want and what the default backend does.
+//! - [`ConPtyBackend::auto`] uses a valid bundle found next to the executable,
+//!   falls back to the system implementation when that bundle is rejected,
+//!   and returns an error if neither is usable. This is also what the default
+//!   backend selection does.
 //! - [`ConPtyBackend::from_dir`] loads a bundle from a directory you name,
 //!   validating that its `conpty.dll` and `OpenConsole.exe` are a matching
 //!   pair before either runs.
-//! - [`ConPtyBackend::set_global_default`] installs the chosen backend for the
-//!   whole process; a front end's `PtyBuilder::backend` sets it per session.
+//! - With either frontend enabled, `SessionOptions::backend` selects a backend
+//!   for a managed session.
+//!
+//! Cursor inheritance, manual EOF policy, detached sessions, and pre-staged
+//! spawning are intentionally outside the 0.1 API. They can be added later as
+//! typed advanced operations when concrete use cases justify them.
 
-// Every internal layer of this crate — the command builder, the pipes, the
-// pseudoconsole lifecycle, the spawn path — exists to serve a front end. With
-// none compiled in (`--no-default-features` leaves only the public type
-// definitions reachable) those layers legitimately have no consumer, so the
-// dead-code lint is silenced in exactly that configuration. It stays active in
-// every configuration that has a front end — blocking, async, or both — where
-// an unused item really is a mistake.
-#![cfg_attr(not(any(feature = "blocking", feature = "tokio")), allow(dead_code))]
+// `cargo test --doc` normally inspects only Rust source, not README.md. Under
+// the all-frontend configuration used by CI, append the README while rustdoc
+// is collecting tests so its blocking, Tokio, and low-level snippets are the
+// exact text compiled. It is omitted from ordinary API documentation and from
+// single/no-frontend doctest legs, where one of those snippets is intentionally
+// unavailable.
+#![cfg_attr(
+    all(doctest, feature = "blocking", feature = "tokio"),
+    doc = include_str!("../README.md")
+)]
 // docs.rs passes `--cfg docsrs` (see `[package.metadata.docs.rs]`), which
 // turns on the nightly-only `doc_cfg` feature: every feature-gated item then
 // carries an "Available on crate feature … only" badge. Stable builds never
@@ -78,13 +119,11 @@
 // in 1.92 — rust-lang/rust#138907 — so naming it here breaks the docs.rs
 // build.)
 #![cfg_attr(docsrs, feature(doc_cfg))]
-// Every public item carries documentation, and this keeps it that way. `warn`
-// rather than `deny` so a half-written local edit still builds; every CI clippy
-// invocation passes `-D warnings`, which promotes this to a hard error there.
-// It lives here rather than in a `[lints.rust]` table so that it applies to the
-// crate under any driver — `cargo rustc`, rustdoc, rust-analyzer — instead of
-// only where Cargo forwards its lint configuration.
-#![warn(missing_docs)]
+// Every public item carries documentation, and this keeps it that way under
+// every driver — `cargo rustc`, rustdoc, rust-analyzer — including invocations
+// where Cargo does not forward the workspace lint table.
+#![deny(missing_docs)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 #[cfg(not(windows))]
 compile_error!(
@@ -92,31 +131,29 @@ compile_error!(
      build it with a `*-pc-windows-*` target."
 );
 
+#[cfg(any(feature = "blocking", feature = "tokio"))]
+mod api;
 mod backend;
+#[cfg(any(feature = "blocking", feature = "tokio", test))]
 mod command;
+#[cfg(any(feature = "blocking", feature = "tokio", test))]
 mod core;
 mod error;
 mod size;
 mod status;
 
+#[cfg(all(test, feature = "tracing"))]
+mod tracing_test_support;
+
 #[cfg(feature = "blocking")]
 pub mod blocking;
 
-// Spelled `asyn` because `async` is a keyword. The module is public for the
-// sake of its documentation — the async lifecycle rules and the async example
-// live there, and the type docs refer to them — while its types are also
-// re-exported at the root, so that `conpty_oxide::Pty` is the async session
-// and `conpty_oxide::blocking::Pty` the synchronous one.
 #[cfg(feature = "tokio")]
-pub mod asyn;
+pub mod tokio;
 
-#[cfg(feature = "tokio")]
-pub use asyn::{
-    Child, Command, OwnedReadHalf, OwnedWriteHalf, Pty, PtyBuilder, PtyController, ReadHalf,
-    WriteHalf,
-};
-
-pub use backend::{BackendKind, ConPtyBackend};
-pub use error::{BackendError, Error, Result};
+#[cfg(any(feature = "blocking", feature = "tokio"))]
+pub use api::{PtyController, SessionOptions, SessionOutput};
+pub use backend::ConPtyBackend;
+pub use error::{BackendError, BackendErrorKind, Error, ErrorKind, Result};
 pub use size::Size;
 pub use status::ExitStatus;

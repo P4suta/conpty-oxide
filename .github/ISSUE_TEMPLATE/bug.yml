@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+---
+name: Bug report
+description: Report reproducible incorrect behavior in conpty-oxide
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not disclose vulnerabilities or sensitive conduct incidents here.
+        Use the private links shown in the issue chooser.
+  - type: input
+    id: crate-version
+    attributes:
+      label: Crate version or commit
+      placeholder: 0.1.0 or a full commit SHA
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and build
+      description: Include client or server edition and the build from winver.
+      placeholder: Windows 11 24H2, build 26100.x
+    validations:
+      required: true
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Architecture
+      options:
+        - x86_64-pc-windows-msvc
+        - i686-pc-windows-msvc
+        - aarch64-pc-windows-msvc
+    validations:
+      required: true
+  - type: input
+    id: rust
+    attributes:
+      label: Rust version and features
+      placeholder: rustc 1.75.0; default features, or tokio and tracing
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: ConPTY backend
+      options:
+        - System ConPTY
+        - Bundled conpty.dll and OpenConsole.exe
+        - Automatic or unknown
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include a complete small program and exact commands where possible.
+      render: rust
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the full error chain, exit status, VT bytes, or timeout point.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Drop order, cancellation point, DLL ProductVersion, or traces can be useful.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for this behavior.
+          required: true
+        - label: This report contains no vulnerability or sensitive personal information.
+          required: true

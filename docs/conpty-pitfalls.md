@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+SPDX-License-Identifier: MIT OR Apache-2.0
+-->
+
 # ConPTY pitfalls
 
 Windows' pseudoconsole API is small — a handful of entry points and two pipes
@@ -71,9 +76,9 @@ possible.
 child that writes roughly 280 KiB (4000 lines) into a session nobody reads,
 confirm the pipe buffer really did fill (the child must still be running), and
 then destroy the session in each of four drop orders. Every order has to finish
-within five seconds. Each case runs twice: once in the machine's natural
-lifecycle mode and once on a backend with the release export stripped, so the
-pre-26100 path is exercised even on a 26100+ machine.
+within five seconds. The CI matrix runs the public drop-order suite on both
+pre-26100 and current Windows, while crate-internal tests strip the release
+export to exercise legacy transitions deterministically on newer machines.
 
 **In this crate.** `src/core/pseudocon.rs` holds a small state machine over
 (reader state, close state). It guarantees that `ClosePseudoConsole` runs
@@ -81,13 +86,13 @@ exactly once, and it enumerates the five situations in which the call is
 allowed to run, each with an argument for why it cannot block indefinitely:
 after the reader saw end-of-file, after the reader's handle is retired, an
 explicit request with no live reader, an explicit request from the legacy
-watcher thread (which is allowed to block), and an explicit request in released
-mode (deferred to the reader's own transition). The reader thread only ever
-runs the close after end-of-file, which proves the host is already gone. The
-final defence is `Drop`, which never blocks: where promptness cannot be proven,
-the `HPCON` goes to a detached thread instead. The public consequence is the
-one stated in the API docs — dropping the parts of a session in any order
-completes.
+post-exit close worker (which is allowed to block), and an explicit request in
+released mode (deferred to the reader's own transition). The reader thread
+only ever runs the close after end-of-file, which proves the host is already
+gone. The final defence is `Drop`, which never blocks: where promptness cannot
+be proven, the `HPCON` goes to a detached thread instead. The public
+consequence is the one stated in the API docs — dropping the parts of a
+session in any order completes.
 
 **Sources.**
 
@@ -120,9 +125,9 @@ watcher. Releasing before a client exists would release a console nobody is
 attached to; skipping the watcher on a legacy backend would leave a reader
 waiting for an end-of-file that can never arrive. `ConPtyBackend` resolves
 every entry point with `GetProcAddress` and reports
-`ConPtyBackend::supports_release()`; a failed release is logged (with the
-`tracing` feature) and demotes that session to the legacy path rather than
-failing it.
+the backend's internal release capability check; a failed release is logged
+(with the `tracing` feature) and demotes that session to the legacy path
+rather than failing it.
 
 **Sources.**
 
@@ -200,7 +205,7 @@ exactly the mismatched pairs the check exists to reject.
 **Measured here.** Two real releases of the same minor line —
 `1.24.260710001` and `1.24.260303001` — were compared with both parsers. The
 16-bit parse accepted the cross-release pair; the 64-bit one refuses it with
-`BackendError::VersionMismatch`, which is why the loader parses `u64`. The
+`BackendErrorKind::VersionMismatch`, which is why the loader parses `u64`. The
 tests `parse_version_reads_the_numeric_prefix` and
 `version_pair_compatibility` in `src/backend.rs` keep both halves true: the
 former pins the nine-digit component parse, the latter pins the refusal of
@@ -218,7 +223,8 @@ version resources are unreadable for a reason the caller controls, and its
 documentation says plainly what it is opting out of. `ConPtyBackend::auto`
 applies the same validation to the executable's own directory and falls back to
 the system ConPTY, logging the rejection under the `tracing` feature so a
-bundle that is silently ignored is still diagnosable.
+bundle that is silently ignored is still diagnosable. It returns an error only
+if the system ConPTY is unavailable too.
 
 **Sources.**
 
@@ -254,9 +260,9 @@ any of the three architecture subdirectories. Comparing that against
 approved could still run every session against the inbox host — and commit
 `90e3094` narrowed it to the two locations the DLL really searches.
 
-**In this crate.** `find_console_host` in `src/backend.rs` mirrors the DLL's
-search exactly: adjacent first, then the native-architecture subdirectory
-resolved through a dynamically loaded `IsWow64Process2`. The inbox
+**In this crate.** `find_console_host` in `src/backend/bundle.rs` mirrors the
+DLL's search exactly: adjacent first, then the native-architecture
+subdirectory resolved through a dynamically loaded `IsWow64Process2`. The inbox
 `conhost.exe` is deliberately not accepted as a validation target — falling
 back to it hands the caller a backend with the behaviour they were trying to
 replace. `scripts/fetch-conpty.ps1` lays both files out side by side, which is
@@ -318,10 +324,12 @@ process handle owns one process; the tree needs a job object.
 list, kills the session, and requires the grandchild to disappear. It runs in
 both lifecycle modes.
 
-**In this crate.** `ProcessWaiter` in `src/core/wait.rs` waits on the process
-handle and reads the exit code only after the wait confirmed the exit; that is
-the whole `wait`/`try_wait` implementation, sync and async alike. The job
-object in `src/core/job.rs` is created before the process and attached with
+**In this crate.** `ProcessWaiter` in `src/core/wait.rs` implements blocking
+`wait` and the shared zero-timeout `try_wait`. Tokio `Child::wait` duplicates
+the process handle into a one-shot Windows registered wait instead, so no
+runtime or crate thread is parked while the child lives. Both paths read the
+exit code only after Windows has signalled the process. The job object in
+`src/core/job.rs` is created before the process and attached with
 `PROC_THREAD_ATTRIBUTE_JOB_LIST`, so the child joins the job before its first
 instruction — no `CREATE_SUSPENDED`/`AssignProcessToJobObject`/`ResumeThread`
 dance, and no window in which a grandchild could escape. `Child::kill`
@@ -396,18 +404,19 @@ which is why the classic sample works everywhere — but they cannot be
 registered with an I/O completion port, so an async front end cannot use them
 for its own ends.
 
-**In this crate.** `src/core/pipes.rs` builds the pipes in two shapes, one per
-front end. The blocking front end uses anonymous pipes from `CreatePipe`,
-which are synchronous by construction. The async front end builds each
-direction as a single-instance named pipe: the crate keeps the *server* end,
-opened with `FILE_FLAG_OVERLAPPED` and registered with Tokio's I/O driver, and
-hands `CreatePseudoConsole` the *client* end, opened synchronously. New and
-old hosts both see the handle shape they expect. Two details from the named-pipe API are
-worth repeating because they are easy to get wrong: `ConnectNamedPipe` on an
-overlapped handle must not be passed a null `OVERLAPPED`, and when the client
-connected before the call was issued it fails with `ERROR_PIPE_CONNECTED`,
-which means success. Every handle is created non-inheritable as well — a leaked
-copy of the conout write end would keep end-of-file from ever arriving.
+**In this crate.** The `src/core/pipes.rs` facade selects one feature-local
+implementation. `src/core/pipes/anonymous.rs` uses synchronous `CreatePipe`
+pairs for the blocking front end. `src/core/pipes/overlapped.rs` builds each
+Tokio direction as a single-instance named pipe: the crate keeps the *server*
+end, opened with `FILE_FLAG_OVERLAPPED` and registered with Tokio's I/O driver,
+and hands `CreatePseudoConsole` the *client* end, opened synchronously. New and
+old hosts both see the handle shape they expect. Two details from the
+named-pipe API are worth repeating because they are easy to get wrong:
+`ConnectNamedPipe` on an overlapped handle must not be passed a null
+`OVERLAPPED`, and when the client connected before the call was issued it
+fails with `ERROR_PIPE_CONNECTED`, which means success. Every handle is
+created non-inheritable as well — a leaked copy of the conout write end would
+keep end-of-file from ever arriving.
 
 **Sources.**
 
@@ -439,13 +448,16 @@ exits.
 
 **In this crate.** The watcher lives in `src/core/wait.rs` and is armed only
 when the session could not be released and `PtyBuilder::eof_on_root_exit` is
-set (the default). It waits on its own duplicate of the process handle, sleeps
-out the grace period, and requests the close from its own thread — never the
-reader's. The builder documents the two side effects honestly: output from
-descendants that outlive the root child may be cut off, and the session is torn
-down even if the caller still holds the controller, so `resize` starts failing
-with `NotConnected`. Turning the watcher off is supported and leaves the caller
-responsible for knowing when the session is finished.
+set (the default). Windows waits on its own duplicate of the process handle;
+the crate creates no thread while the child is alive. After exit, a short-lived
+worker sleeps out the grace period and requests the close — never from the
+reader's thread. If worker creation fails, the registered long-function
+callback completes that post-exit work itself. The builder documents the two
+side effects honestly: output from descendants that outlive the root child may
+be cut off, and the session is torn down even if the caller still holds the
+controller, so `resize` starts failing with `NotConnected`. Turning the watcher
+off is supported and leaves the caller responsible for knowing when the
+session is finished.
 
 **Sources.**
 
@@ -483,11 +495,15 @@ rather than trusting that the call succeeded — a swapped pair succeeds too.
 | --- | --- |
 | Close hangs, drop order, the five close situations | `src/core/pseudocon.rs` |
 | Release after spawn, the three-step spawn order | `src/core/session.rs` |
-| Conin is the terminal, not stdin | `src/blocking/mod.rs`, `src/asyn/mod.rs` |
-| Bundle validation, version pairs, export detection | `src/backend.rs` |
-| Console host discovery | `src/backend.rs`, `scripts/fetch-conpty.ps1` |
-| Cursor inheritance | `src/backend.rs`, both `PtyBuilder`s |
+| Conin is the terminal, not stdin | `src/blocking/pty.rs`, `src/tokio/pty.rs` |
+| Bundle validation and version pairs | `src/backend/bundle.rs` |
+| Export detection and module pinning | `src/backend/exports.rs` |
+| Console host discovery | `src/backend/bundle.rs`, `scripts/fetch-conpty.ps1` |
+| Cursor inheritance | `src/backend.rs`, both frontend `builder.rs` modules |
 | Exit detection, legacy watcher | `src/core/wait.rs` |
 | Kill tree | `src/core/job.rs` |
-| Async teardown, cancelled I/O | `src/asyn/mod.rs` |
-| Handle flavours, named pipe pairs | `src/core/pipes.rs` |
+| Async teardown, cancelled I/O | `src/tokio/pty.rs` |
+| Anonymous and overlapped pipe creation | `src/core/pipes/` |
+
+These paths are implementation anchors; the public contracts remain in the
+API documentation next to the operations they constrain.

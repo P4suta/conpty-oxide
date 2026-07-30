@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[graph]
+all-features = true
+targets = [
+  "aarch64-pc-windows-msvc",
+  "i686-pc-windows-msvc",
+  "x86_64-pc-windows-msvc",
+]
+
+[advisories]
+version = 2
+ignore = []
+unmaintained = "all"
+unsound = "all"
+unused-ignored-advisory = "deny"
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = ["Apache-2.0", "MIT", "Unicode-3.0"]
+confidence-threshold = 1.0
+exceptions = []
+include-build = true
+include-dev = true
+unused-allowed-license = "deny"
+
+[licenses.private]
+ignore = false
+
+[bans]
+highlight = "all"
+multiple-versions = "deny"
+multiple-versions-include-dev = true
+skip = [
+  { crate = "syn@3.0.3", reason = "thiserror 2 uses syn 3 while the tokio and tracing proc macros still use syn 2" },
+]
+skip-tree = []
+wildcards = "deny"
+
+[sources]
+allow-git = []
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+required-git-spec = "rev"
+unknown-git = "deny"
+unknown-registry = "deny"
+unused-allowed-source = "deny"

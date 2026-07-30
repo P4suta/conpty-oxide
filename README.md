@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+SPDX-License-Identifier: MIT OR Apache-2.0
+-->
+
 # conpty-oxide
 
 A correctness-first ConPTY (Windows pseudoconsole) library for Rust, with a
@@ -11,7 +16,8 @@ crate treats those failure modes as the product — see
 [docs/conpty-pitfalls.md](docs/conpty-pitfalls.md) for the full catalogue with
 primary sources.
 
-Status: 0.1.0. The API is not stable yet; expect breaking changes before 1.0.
+Status: 0.1.0. The 0.1 API is deliberately small and centered on managed
+sessions; later minor releases may still make breaking changes before 1.0.
 
 ## Why this crate exists
 
@@ -44,19 +50,18 @@ bundle is consistent.
   the parts of a session in any order completes.
 - **Kill the whole tree.** The child and every descendant join a job object
   assigned at creation time, so `Child::kill` terminates the tree rather than
-  orphaning it. `Command::kill_on_drop` also asks the kernel to finish the job
-  when the handle closes, so the tree dies even if no destructor ever runs.
-- **Sync and async.** A blocking front end (`conpty_oxide::blocking`) and a
-  Tokio one (`conpty_oxide::Pty`, `AsyncRead` + `AsyncWrite`, `Child::wait` as
-  a future). The two are independent and either can be compiled out.
+  orphaning it. Managed sessions also ask the kernel to finish the job when
+  ownership is dropped.
+- **Sync and async.** Symmetric blocking (`conpty_oxide::blocking`) and Tokio
+  (`conpty_oxide::tokio`) front ends. The module path always states which I/O
+  model a type uses, and either front end can be compiled out.
 - **Bundled `conpty.dll` support.** Load the standalone console from a
   directory you name or from next to your executable, with the
   `conpty.dll`/`OpenConsole.exe` version pair validated before any of its code
   runs — a mismatched pair is a hard crash, not a degradation.
 - **Capabilities, not guesses.** `ClearPseudoConsole` exists only in the
-  standalone DLL and `ReleasePseudoConsole` only on newer builds, so both are
-  detected by export and reported (`supports_clear`, `supports_release`);
-  asking for a missing one is a typed error, never a surprise.
+  standalone DLL, so availability is detected by export and reported through
+  `supports_clear`; asking for a missing operation is a typed error.
 - **Optional `tracing`.** Silent fallbacks — an ignored bundle, a demoted
   session — are logged rather than invisible.
 
@@ -71,8 +76,12 @@ The default `blocking` feature gives the synchronous API. For the async one,
 add the `tokio` feature (and drop the default if you do not need both):
 
 ```toml
+[dependencies.conpty-oxide]
+version = "0.1"
+default-features = false
+features = ["tokio"]
+
 [dependencies]
-conpty-oxide = { version = "0.1", default-features = false, features = ["tokio"] }
 # The crate itself needs only tokio's net and rt features; these are the ones
 # the example below uses directly.
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread"] }
@@ -81,33 +90,15 @@ tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread"] }
 ### Blocking
 
 ```rust
-use std::io::Read;
-use std::thread;
-
-use conpty_oxide::blocking::{Command, Pty};
-use conpty_oxide::Size;
+use conpty_oxide::blocking::Command;
 
 fn main() -> conpty_oxide::Result<()> {
-    let pty = Pty::builder().size(Size::new(24, 80)).build()?;
-    let mut child = Command::new("cmd.exe")
+    let output = Command::new("cmd.exe")
         .args(["/c", "echo", "hello"])
-        .spawn(&pty)?;
+        .output()?;
 
-    // The output pipe must be drained while the child runs. The write half is
-    // unused here but deliberately kept alive: dropping it would end the
-    // session early.
-    let (mut reader, writer, _controller) = pty.into_split();
-    let output = thread::spawn(move || {
-        let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).map(|_| buf)
-    });
-
-    let status = child.wait()?;
-    let output = output.join().expect("the reader thread must not panic")?;
-    drop(writer);
-
-    print!("{}", String::from_utf8_lossy(&output));
-    assert!(status.success());
+    print!("{}", String::from_utf8_lossy(output.as_bytes()));
+    assert!(output.status().success());
     Ok(())
 }
 ```
@@ -115,35 +106,61 @@ fn main() -> conpty_oxide::Result<()> {
 ### Tokio
 
 ```rust
-use conpty_oxide::{Command, Pty, Size};
-use tokio::io::AsyncReadExt;
+use conpty_oxide::tokio::Command;
 
 #[tokio::main]
 async fn main() -> conpty_oxide::Result<()> {
-    // Must be built inside a runtime: the session's pipes are registered with
-    // its I/O driver.
-    let pty = Pty::builder().size(Size::new(24, 80)).build()?;
-    let mut child = Command::new("cmd.exe")
+    let output = Command::new("cmd.exe")
         .args(["/c", "echo", "hello"])
-        .spawn(&pty)?;
+        .output()
+        .await?;
 
-    let (mut reader, writer, _controller) = pty.into_split();
-    let output = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).await.map(|_| buf)
-    });
-
-    let status = child.wait().await?;
-    let output = output.await.expect("the reader task must not panic")?;
-    drop(writer);
-
-    print!("{}", String::from_utf8_lossy(&output));
-    assert!(status.success());
+    print!("{}", String::from_utf8_lossy(output.as_bytes()));
+    assert!(output.status().success());
     Ok(())
 }
 ```
 
-Two rules apply to both front ends, and they are the ones ConPTY imposes on
+`Command::spawn()` returns a managed `Session` instead when input and output
+need to remain interactive. Dropping that session, or a `Child` obtained from
+`Session::into_parts`, terminates its entire process tree.
+
+### Interactive managed sessions
+
+Use `Session::into_parts` when input, output, process waiting, and terminal
+control need to progress independently:
+
+```rust
+use std::io::Read;
+use std::thread;
+
+use conpty_oxide::blocking::Command;
+
+fn main() -> conpty_oxide::Result<()> {
+    let parts = Command::new("cmd.exe")
+        .args(["/c", "echo", "hello"])
+        .spawn()?
+        .into_parts();
+    let mut child = parts.child;
+    let mut output = parts.output;
+    let input = parts.input;
+    let controller = parts.controller;
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        output.read_to_end(&mut bytes).map(|_| bytes)
+    });
+
+    let status = child.wait()?;
+    let bytes = reader.join().expect("reader thread panicked")?;
+    drop(input);
+    drop(controller);
+    assert!(status.success());
+    print!("{}", String::from_utf8_lossy(&bytes));
+    Ok(())
+}
+```
+
+Two rules apply to interactive sessions, and they are the ones ConPTY imposes on
 every caller:
 
 1. **Drain the output while the child runs.** The console host writes eagerly;
@@ -153,9 +170,14 @@ every caller:
    is not "no more input" — the console host reads it as the terminal being
    closed and terminates its clients with `0xC000013A`.
 
-Runnable programs live in [`examples/`](examples): `blocking_echo` is the
-first one above, and `tokio_interactive` relays this terminal's input and
-output to a real shell running inside a session.
+Cursor inheritance, manual EOF policy, detached sessions, and pre-staged
+spawning are intentionally outside the 0.1 API. They may return later as typed
+advanced operations when concrete users need them.
+
+Runnable programs live in [`examples/`](examples): `blocking_echo` uses
+managed output collection, and `tokio_interactive` relays this terminal's
+input and output to a real shell through managed session parts. The examples
+and managed quick starts are compiled by the all-features documentation gate.
 
 ```powershell
 cargo run --example blocking_echo
@@ -164,8 +186,9 @@ cargo run --features tokio --example tokio_interactive
 
 ## Using a bundled `conpty.dll`
 
-Sessions run on the operating system's ConPTY unless told otherwise, which
-needs no setup at all. Shipping the standalone `conpty.dll` from the
+Automatic selection needs no setup: it prefers a validated standalone
+`conpty.dll` bundle next to the executable, then falls back to the operating
+system's ConPTY. Shipping that DLL from the
 [`Microsoft.Windows.Console.ConPTY`](https://www.nuget.org/packages/Microsoft.Windows.Console.ConPTY)
 package (MIT, published by the microsoft/terminal team) buys two things: the
 newer console host's behaviour — including `ReleasePseudoConsole`, and with it
@@ -185,28 +208,37 @@ files, from the same package version, are required.
 
 Point the crate at it:
 
-```rust
-use conpty_oxide::ConPtyBackend;
+```rust,no_run
+use conpty_oxide::blocking::Command;
+use conpty_oxide::{ConPtyBackend, SessionOptions};
 
 fn main() -> conpty_oxide::Result<()> {
     // A bundle next to the executable, validated, with the system ConPTY as
     // the fallback. This is also what an unconfigured session uses.
-    ConPtyBackend::auto().set_global_default();
+    let automatic = ConPtyBackend::auto()?;
 
     // Or name the directory explicitly and handle a bad bundle yourself.
     let backend = ConPtyBackend::from_dir("vendor/conpty")?;
-    println!("{:?}, clear: {}", backend.kind(), backend.supports_clear());
+    println!("clear supported: {}", backend.supports_clear());
+
+    // Backend choice is explicit per managed session; there is no mutable
+    // process-wide default.
+    let output = Command::new("cmd.exe")
+        .args(["/c", "echo", "hello"])
+        .spawn_with(SessionOptions::new().backend(automatic))?
+        .wait_with_output()?;
+    assert!(output.status().success());
 
     Ok(())
 }
 ```
 
-`ConPtyBackend::from_dir` reports why a bundle was refused
-(`BackendError::DllNotFound`, `OpenConsoleMissing`, `VersionMismatch`,
-`MissingExport`); `ConPtyBackend::auto` swallows the same failures and falls
-back to the system implementation, logging the rejection under the `tracing`
-feature. A backend can be installed process-wide with `set_global_default` or
-per session with `PtyBuilder::backend`.
+`ConPtyBackend::from_dir` reports why a bundle was refused through
+`BackendError::kind` and `BackendErrorKind`. `ConPtyBackend::auto` logs and
+ignores a rejected adjacent
+bundle, then falls back to the system implementation. It returns `Err` only
+when no usable system ConPTY is available either, so every successful result is
+a usable backend. Pass one per managed session with `SessionOptions::backend`.
 
 > **The two files must be a matched pair — and a current one.** `conpty.dll`
 > launches `OpenConsole.exe` and speaks a private, versioned protocol to it,
@@ -214,12 +246,10 @@ per session with `PtyBuilder::backend`.
 > stale pair crashes too — wezterm#7774 is PowerShell FailFasting under a
 > matched but outdated bundle — and version equality cannot detect that, so
 > keep the bundle current.
-> `from_dir` compares both `ProductVersion` resources and
-> refuses a pair it cannot prove consistent — `from_dir_unchecked` opts out of
-> that check and should stay unused unless you can guarantee the pair by other
-> means. The DLL also only looks for its host next to itself and in the
-> native-architecture subdirectory, so putting both files in one directory is
-> the layout with no surprises. See
+> `from_dir` compares both `ProductVersion` resources and refuses a pair it
+> cannot prove consistent. The DLL also only looks for its host next to itself
+> and in the native-architecture subdirectory, so putting both files in one
+> directory is the layout with no surprises. See
 > [pitfalls 4 and 5](docs/conpty-pitfalls.md#a-bundled-dll-and-its-console-host-must-be-a-matched-pair).
 
 ## Platform support
@@ -229,8 +259,8 @@ explanatory `compile_error!` rather than failing to link.
 
 | Windows | Behaviour |
 | --- | --- |
-| Older than 10 1809 (build 17763) | No ConPTY. The binary still loads — the API is resolved with `GetProcAddress` — and building a session fails with `Error::Backend`. |
-| 10 1809 through 11 23H2, Server 2019/2022 | Legacy lifecycle: the console host outlives the child, so end-of-file is forced by a watcher thread about a second after the root child exits. |
+| Older than 10 1809 (build 17763) | No ConPTY. The binary still loads — the API is resolved with `GetProcAddress` — and building a session fails with `ErrorKind::Backend`. |
+| 10 1809 through 11 23H2, Server 2019/2022 | Legacy lifecycle: the console host outlives the child, so a registered wait triggers a short-lived grace/close worker after the root child exits. |
 | 11 24H2 / Server 2025 (build 26100) and later | `ReleasePseudoConsole` fast path: the session is released right after the spawn, the host exits with its last client, and end-of-file arrives on its own. |
 
 A current bundled `conpty.dll` gives the fast path on every supported version
@@ -247,7 +277,7 @@ The minimum supported Rust version is **1.75**, verified in CI.
   failure modes this crate is built around: what goes wrong, why, how it is
   handled here, and the primary source for each.
 - API documentation: `cargo doc --all-features --open`. The module docs of
-  `blocking` and `asyn` state the lifecycle rules in full.
+  `blocking` and `tokio` state the lifecycle rules in full.
 
 ## Roadmap
 
@@ -255,23 +285,34 @@ The minimum supported Rust version is **1.75**, verified in CI.
   surface yet: `ConptyCreatePseudoConsoleAsUser`,
   `ConptyShowHidePseudoConsole`, `ConptyReparentPseudoConsole`,
   `ConptyPackPseudoConsole`.
-- Exit detection through `RegisterWaitForSingleObject`, so that waiting on a
-  child — and the legacy watcher — no longer parks a thread in
-  `WaitForSingleObject`.
 - A cross-platform facade, so callers that also target Unix can share code
   while this crate stays the Windows backend.
 
 ## Development
 
-`just ci` runs everything CI checks: lint, rustdoc with warnings denied, and
-the test suite.
-
-The tests that drive a bundled `conpty.dll` need one to drive, so they are
-opt-in:
+With PowerShell 7, Rustup, mise, and just available, install the exact
+toolchain and hooks recorded in `mise.lock`:
 
 ```powershell
-just fetch-conpty  # download the pinned ConPTY package into vendor/conpty
-just test-dll      # run the suite with CONPTY_OXIDE_TEST_DLL_DIR set
+just setup
+```
+
+The hooks are intentionally staged. Pre-commit runs formatting, REUSE,
+source-policy, dependency, spelling, Markdown, YAML, workflow, and TOML checks.
+Pre-push adds the full Clippy feature powerset, supply-chain checks, PowerShell
+analysis, nextest, and doctests. CI additionally covers the MSRV, all supported
+Windows architectures, both ConPTY lifecycle modes, the validated DLL bundle,
+and the 92% line/region/function coverage floor.
+
+Useful commands:
+
+```powershell
+just lint          # every static policy and Clippy configuration
+just test          # nextest plus doctests
+just coverage      # DLL-backed LLVM coverage with enforced thresholds
+just mutants-list  # inspect mutation candidates without editing source
+just mutants       # full mutation suite in a safe temporary copy
+just ci            # complete required-CI equivalent, except scheduled mutation
 ```
 
 `just fetch-conpty` downloads a pinned version of the
@@ -281,6 +322,13 @@ package, verifies its SHA-256, and lays `conpty.dll` out next to the matching
 Without that directory the external-backend tests note the skip on stderr and
 the rest of the suite runs unchanged; CI always fetches it, so both backends
 are covered there.
+
+Every project-owned file follows REUSE 3.3. New commentable files must carry
+the repository SPDX copyright and `MIT OR Apache-2.0` identifier; generated or
+non-commentable files belong in `REUSE.toml`. `reuse lint` is a required local
+and CI gate. Rust source also has a repository policy of no dynamic trait
+objects, no ignored tests, and no lint suppressions except the documented
+shared integration-test harness exception.
 
 ## License
 

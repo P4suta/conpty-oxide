@@ -1,6 +1,10 @@
+---
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 name: CI
 
-on:
+"on":
   push:
     branches: [main]
   pull_request:
@@ -13,62 +17,58 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  hygiene:
-    name: Hygiene
+  policy:
+    name: Repository policy
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 (stable)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+          components: rustfmt
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14  # v4
+        with:
+          version: 2026.7.13
+      - name: Install the pinned PowerShell analyzer
+        run: just setup-powershell-lint
+      - name: Run repository policy
+        run: just policy
+
+  hygiene:
+    name: Rust hygiene
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: rustfmt
-        run: cargo fmt --all -- --check
-      - name: clippy (no default features)
-        run: cargo clippy --no-default-features --all-targets -- -D warnings
-      - name: clippy (default features)
-        run: cargo clippy --all-targets -- -D warnings
-      - name: clippy (tokio)
-        run: cargo clippy --features tokio --all-targets -- -D warnings
-      - name: clippy (all features)
-        run: cargo clippy --all-features --all-targets -- -D warnings
-      # Rustdoc's own diagnostics — broken intra-doc links, unclosed code
-      # fences, invalid HTML — are invisible to `cargo build` and `cargo
-      # clippy`, so a published page can rot without any other job noticing.
-      # `-D warnings` also promotes the crate's `#![warn(missing_docs)]`, which
-      # makes this the second gate on an undocumented public item.
-      - name: rustdoc
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --all-features --no-deps
-      # docs.rs builds on nightly and passes `--cfg docsrs` (see
-      # `[package.metadata.docs.rs]`), a configuration no other job compiles.
-      # Anything reachable only through it - the `feature(doc_cfg)` gate in
-      # src/lib.rs above all - is therefore invisible to every check above,
-      # and a mistake there does not degrade the published page, it replaces
-      # it with a build log. Reproducing that exact configuration here keeps
-      # the docs.rs build a CI failure rather than a post-release discovery.
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 (nightly)
+          targets: x86_64-pc-windows-msvc, i686-pc-windows-msvc, aarch64-pc-windows-msvc
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
-          toolchain: nightly
-      # `+nightly` explicitly: the install above also makes nightly rustup's
-      # default, and pinning the toolchain per command keeps this step correct
-      # no matter where it sits among the others.
-      #
-      # Intra-doc links are exempted here because the stable `rustdoc` step
-      # already gates them with `-D warnings` over the same crate and the same
-      # features, so nothing is lost - while nightly resolves links against a
-      # std that is still moving. As of nightly 1.98 it fails to resolve the
-      # allocation-gated `io::Error` methods (`new`, `other`, `into_inner`,
-      # `downcast`) that stable resolves fine, which would make this step red
-      # for a reason that has nothing to do with this crate.
-      - name: rustdoc (docs.rs configuration)
-        env:
-          RUSTDOCFLAGS: --cfg docsrs -D warnings -A rustdoc::broken_intra_doc_links
-        run: cargo +nightly doc --all-features --no-deps
-      - name: typos
-        uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
+          toolchain: nightly-2026-07-02
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: "1.75"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
+        with:
+          tool: just@1.57.0,cargo-hack@0.6.45,cargo-public-api@0.52.0
+      - name: Strict Clippy feature powerset
+        run: just lint-rust
+      - name: Public API feature powerset
+        run: just api-matrix
+      - name: Public API snapshots
+        run: just public-api
+      - name: Stable rustdoc
+        run: just doc
+      - name: docs.rs rustdoc
+        run: just doc-docsrs
+      - name: MSRV feature powerset
+        run: just msrv
+      - name: Windows architecture checks
+        run: just cross-targets
 
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
@@ -77,12 +77,6 @@ jobs:
       matrix:
         os: [windows-2022, windows-latest]
         rust: [stable, "1.75"]
-        # Pin which ConPTY lifecycle mode each leg is expected to exercise:
-        # Server 2022 predates ReleasePseudoConsole (legacy shutdown path),
-        # windows-latest (Server 2025, build 26100+) exports it (released
-        # path). The suite asserts this via CONPTY_OXIDE_EXPECT_RELEASE, so a
-        # matrix or runner-image change that silently drops one mode's
-        # coverage fails loudly instead.
         include:
           - os: windows-2022
             expect_release: "0"
@@ -91,56 +85,87 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CONPTY_OXIDE_EXPECT_RELEASE: ${{ matrix.expect_release }}
-      # The bundled conpty.dll is fetched below on every leg, so the two
-      # variables together cover the product: windows-2022 runs a legacy
-      # system ConPTY alongside a modern bundle, windows-latest a released
-      # system ConPTY alongside the same bundle. The bundle's own lifecycle
-      # mode does not depend on the runner image, which is exactly why the
-      # external-backend tests are worth running on both.
       CONPTY_OXIDE_TEST_DLL_DIR: ${{ github.workspace }}/vendor/conpty
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: ${{ matrix.rust }}
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
         with:
-          tool: cargo-nextest
-      # The package is version-pinned and checksum-pinned inside the script,
-      # so keying the cache on the script's hash invalidates it exactly when
-      # the pin moves and never otherwise.
-      - name: cache the ConPTY package
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+          tool: just@1.57.0,cargo-nextest@0.9.140
+      - name: Cache the ConPTY package
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: vendor/.package
           key: conpty-package-${{ hashFiles('scripts/fetch-conpty.ps1') }}
-      # Verifies the SHA-256 (cached or freshly downloaded) and that the
-      # extracted conpty.dll and OpenConsole.exe report the same
-      # ProductVersion, so a tampered or mismatched bundle fails here rather
-      # than as a puzzling crash inside a test.
-      - name: fetch the bundled ConPTY
-        shell: pwsh
-        run: ./scripts/fetch-conpty.ps1
-      - name: build
-        run: cargo build --all-features
-      - name: test
-        run: cargo nextest run --all-features --no-tests=pass
-      # nextest cannot run doctests, so without this step the examples in the
-      # public documentation are never compiled or executed by CI. Running them
-      # here rather than in `hygiene` puts them on the same OS × toolchain
-      # matrix as the rest of the suite: the doctests are the API's advertised
-      # usage, so they should be held to the MSRV and to both ConPTY lifecycle
-      # modes like every other caller.
-      - name: doctests
-        run: cargo test --all-features --doc
+      - name: Fetch and validate the bundled ConPTY
+        run: just fetch-conpty
+      - name: Run nextest and doctests
+        run: just test-ci
+      - name: Upload JUnit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: junit-${{ matrix.os }}-${{ matrix.rust }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: error
+
+  coverage:
+    name: Coverage
+    runs-on: windows-latest
+    env:
+      CONPTY_OXIDE_TEST_DLL_DIR: ${{ github.workspace }}/vendor/conpty
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
+        with:
+          tool: just@1.57.0,cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7
+      - name: Cache the ConPTY package
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: vendor/.package
+          key: conpty-package-${{ hashFiles('scripts/fetch-conpty.ps1') }}
+      - name: Generate and enforce coverage
+        run: just coverage
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage
+          path: target/llvm-cov
+          if-no-files-found: error
+
+  package:
+    name: Published package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f9afabf  # v2.85.2
+        with:
+          tool: just@1.57.0
+      - name: Inspect and smoke-test the published package
+        run: just package-check
 
   ci-required:
     name: CI required
     if: always()
-    needs: [hygiene, test]
+    needs: [policy, hygiene, test, coverage, package]
     runs-on: ubuntu-latest
     steps:
-      - name: Fail if any required job did not succeed
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+      - name: Fail unless every required job succeeded
+        if: >-
+          contains(needs.*.result, 'failure') ||
+          contains(needs.*.result, 'cancelled') ||
+          contains(needs.*.result, 'skipped')
         run: exit 1

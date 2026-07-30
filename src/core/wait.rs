@@ -1,30 +1,50 @@
-//! Child-process exit detection and the legacy shutdown watcher.
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Child-process exit detection and the legacy shutdown wait.
 //!
-//! Exit detection is handle-based: [`ProcessWaiter`] waits on the process
-//! handle with `WaitForSingleObject` and reads the exit code only *after*
-//! the wait has confirmed the process is gone. Calling `GetExitCodeProcess`
-//! on a running process "succeeds" with the sentinel `STILL_ACTIVE` (259),
-//! which is indistinguishable from a real exit code of 259 — sequencing the
-//! two calls is the only correct protocol.
+//! Exit detection is handle-based. Blocking waits use [`ProcessWaiter`] and
+//! `WaitForSingleObject`; the Tokio frontend uses `RegisteredWait` and
+//! `RegisterWaitForSingleObject`. Both read the exit code only *after* the
+//! process is signaled. Calling `GetExitCodeProcess` on a running process
+//! "succeeds" with `STILL_ACTIVE` (259), indistinguishable from a real exit
+//! code of 259, so the ordering is the protocol.
 //!
-//! The other half of this module is the **legacy watcher**
+//! The other half of this module is the **legacy shutdown registration**
 //! ([`spawn_legacy_watcher`]): on Windows versions without
 //! `ReleasePseudoConsole`, the console host outlives the child, so the conout
-//! pipe never reaches end-of-file on its own. The watcher restores the EOF
-//! contract: it waits for the child to exit on a dedicated thread, grants the
-//! reader a grace period to drain the host's remaining output, and then asks
-//! the lifecycle state machine to close the pseudoconsole — from its own
-//! thread, never the reader's — which breaks the conout pipe and surfaces as
-//! end-of-file (`ERROR_BROKEN_PIPE`) to the reader.
+//! pipe never reaches end-of-file on its own. Windows waits without parking a
+//! crate thread; after exit, a short-lived worker grants the reader a drain
+//! grace and asks the lifecycle state machine to close the pseudoconsole from
+//! a non-reader thread. That breaks conout and surfaces as EOF.
 
+use std::ffi::c_void;
+#[cfg(feature = "tokio")]
+use std::future::Future;
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
-use std::sync::Arc;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+#[cfg(feature = "tokio")]
+use std::pin::Pin;
+use std::ptr;
+#[cfg(all(feature = "tokio", test))]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
+#[cfg(feature = "tokio")]
+use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
-use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject, INFINITE};
+#[cfg(feature = "tokio")]
+use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
+use windows_sys::Win32::Foundation::{
+    HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
+use windows_sys::Win32::System::Threading::{
+    GetExitCodeProcess, RegisterWaitForSingleObject, UnregisterWaitEx, WaitForSingleObject,
+    INFINITE, WT_EXECUTELONGFUNCTION, WT_EXECUTEONLYONCE,
+};
 
 use crate::core::pseudocon::ConsoleShared;
 
@@ -35,7 +55,8 @@ use crate::core::pseudocon::ConsoleShared;
 /// correct (the reader keeps draining while the close blocks), but the grace
 /// period lets the common case — reader catches up quickly — finish the tail
 /// before teardown begins.
-pub(crate) const LEGACY_CLOSE_GRACE: Duration = Duration::from_millis(1000);
+#[cfg(any(feature = "blocking", feature = "tokio"))]
+pub(super) const LEGACY_CLOSE_GRACE: Duration = Duration::from_secs(1);
 
 /// Waits on a process handle and reads its exit code.
 ///
@@ -50,7 +71,7 @@ pub(crate) struct ProcessWaiter {
 
 impl ProcessWaiter {
     /// Wraps an owned process handle.
-    pub(crate) fn new(process: OwnedHandle) -> Self {
+    pub(crate) const fn new(process: OwnedHandle) -> Self {
         Self { process }
     }
 
@@ -63,6 +84,7 @@ impl ProcessWaiter {
     ///
     /// Returns the OS error from `WaitForSingleObject` or
     /// `GetExitCodeProcess`.
+    #[cfg(any(feature = "blocking", test))]
     pub(crate) fn wait(&self) -> io::Result<u32> {
         // SAFETY: the handle is owned by `self` and thus live for the call.
         let waited = unsafe { WaitForSingleObject(self.process.as_raw_handle(), INFINITE) };
@@ -121,6 +143,335 @@ impl AsHandle for ProcessWaiter {
     }
 }
 
+/// A thread-pool registered wait used by the Tokio child front end.
+///
+/// Windows owns the callback scheduling. The callback only reads the exit
+/// code, stores it under the context mutex, and wakes the current task; it
+/// never unregisters itself. Waking may synchronously re-enter an executor, so
+/// callback activity and Drop use the state mutex as a cleanup handshake.
+#[cfg(feature = "tokio")]
+pub(crate) struct RegisteredWait {
+    wait_object: HANDLE,
+    context: *mut RegisteredWaitContext,
+}
+
+#[cfg(feature = "tokio")]
+struct RegisteredWaitContext {
+    process: ProcessWaiter,
+    state: Mutex<RegisteredWaitState>,
+}
+
+#[cfg(feature = "tokio")]
+#[derive(Default)]
+struct RegisteredWaitState {
+    result: Option<io::Result<u32>>,
+    waker: Option<Waker>,
+    /// The callback has crossed its entry handshake and may be invoking a
+    /// user-supplied `Waker`.
+    callback_active: bool,
+    /// The owning `RegisteredWait` is being dropped. A callback that has not
+    /// crossed its entry handshake must return without waking user code.
+    owner_dropping: bool,
+    /// The callback owns reclamation of its context after it returns from the
+    /// user-supplied `Waker`.
+    cleanup_after_callback: bool,
+    /// Lets crate-local tests observe callback-tail reclamation directly.
+    #[cfg(test)]
+    cleanup_observer: Option<Arc<AtomicBool>>,
+}
+
+#[cfg(all(feature = "tokio", test))]
+impl Drop for RegisteredWaitContext {
+    fn drop(&mut self) {
+        let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
+        if let Some(observer) = &state.cleanup_observer {
+            observer.store(true, Ordering::Release);
+        }
+    }
+}
+
+// SAFETY: `wait_object` is an opaque kernel handle and `context` points to a
+// heap allocation whose mutable state is synchronized by `Mutex`. Drop either
+// performs a blocking unregister before freeing it or, when a callback is
+// active, successfully requests nonblocking deletion and transfers reclamation
+// to that callback's tail.
+#[cfg(feature = "tokio")]
+unsafe impl Send for RegisteredWait {}
+// SAFETY: polling still requires `Pin<&mut Self>`; shared access only observes
+// the opaque fields. Callback-visible mutation is protected by the mutex.
+#[cfg(feature = "tokio")]
+unsafe impl Sync for RegisteredWait {}
+
+#[cfg(feature = "tokio")]
+impl RegisteredWait {
+    /// Registers an infinite, one-shot wait on a duplicate process handle.
+    pub(crate) fn new(process: BorrowedHandle<'_>) -> io::Result<Self> {
+        let process = ProcessWaiter::new(process.try_clone_to_owned()?);
+        let context = Box::into_raw(Box::new(RegisteredWaitContext {
+            process,
+            state: Mutex::new(RegisteredWaitState::default()),
+        }));
+        let mut wait_object: HANDLE = ptr::null_mut();
+
+        // SAFETY: `context` points to the stable allocation created above.
+        let process_handle = unsafe { (*context).process.as_handle().as_raw_handle() };
+        // SAFETY: `context` is a stable heap allocation and remains live until
+        // either Drop has synchronously unregistered the wait or an active
+        // callback has accepted cleanup ownership. The duplicated process
+        // handle is live inside that allocation. The callback signature and
+        // flags match RegisterWaitForSingleObject's contract.
+        let registered = unsafe {
+            RegisterWaitForSingleObject(
+                &mut wait_object,
+                process_handle,
+                Some(registered_wait_callback),
+                context.cast(),
+                INFINITE,
+                WT_EXECUTEONLYONCE,
+            )
+        };
+        if registered == 0 {
+            let err = io::Error::last_os_error();
+            // SAFETY: registration failed, so Windows retained neither the
+            // pointer nor a callback reference to it.
+            drop(unsafe { Box::from_raw(context) });
+            return Err(err);
+        }
+
+        Ok(Self {
+            wait_object,
+            context,
+        })
+    }
+
+    /// Installs a crate-local observer for context reclamation.
+    #[cfg(test)]
+    fn observe_cleanup(&self, observer: Arc<AtomicBool>) {
+        // SAFETY: successful construction keeps the allocation live until
+        // Drop or the callback tail reclaims it. The state mutex synchronizes
+        // a callback that may already have started.
+        let context = unsafe { &*self.context };
+        context
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .cleanup_observer = Some(observer);
+    }
+}
+
+#[cfg(feature = "tokio")]
+impl Future for RegisteredWait {
+    type Output = io::Result<u32>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: successful construction keeps the allocation live under the
+        // Drop/callback cleanup handshake.
+        let context = unsafe { &*self.context };
+        let mut state = context.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(result) = state.result.take() {
+            return Poll::Ready(result);
+        }
+        if should_replace_waker(state.waker.as_ref(), cx.waker()) {
+            state.waker = Some(cx.waker().clone());
+        }
+        Poll::Pending
+    }
+}
+
+#[cfg(feature = "tokio")]
+fn should_replace_waker(registered: Option<&Waker>, candidate: &Waker) -> bool {
+    registered.map_or(true, |registered| !registered.will_wake(candidate))
+}
+
+#[cfg(feature = "tokio")]
+fn callback_unregister_transfers_cleanup(result: i32, error_code: Option<i32>) -> bool {
+    result != 0 || error_code == i32::try_from(ERROR_IO_PENDING).ok()
+}
+
+#[cfg(feature = "tokio")]
+impl Drop for RegisteredWait {
+    fn drop(&mut self) {
+        // A Waker is allowed to poll its task inline. Consequently the callback
+        // can re-enter `Child::wait`, observe Ready, and drop this registration
+        // before `Waker::wake` returns. A blocking unregister in that situation
+        // would wait for the current callback to finish while the callback was
+        // waiting for this Drop: the exact self-deadlock Microsoft forbids.
+        //
+        // The state mutex is an entry handshake. If the callback is active,
+        // request nonblocking deletion and transfer context reclamation to the
+        // callback. If it is not active, mark the owner as dropping before
+        // releasing the mutex; a concurrently queued callback then skips the
+        // Waker and returns promptly, making the blocking unregister safe.
+        //
+        // SAFETY: successful construction keeps the allocation live until one
+        // of the two reclamation paths below has completed.
+        let context = unsafe { &*self.context };
+        let mut state = context.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.owner_dropping = true;
+        if state.callback_active {
+            // A null completion event is the callback-safe, nonblocking form.
+            // Keep the state mutex held so the callback cannot finish and
+            // inspect `cleanup_after_callback` until the unregister result has
+            // selected its cleanup owner.
+            //
+            // SAFETY: `wait_object` came from successful registration.
+            let unregistered = unsafe { UnregisterWaitEx(self.wait_object, ptr::null_mut()) };
+            let err = io::Error::last_os_error();
+            if callback_unregister_transfers_cleanup(unregistered, err.raw_os_error()) {
+                state.cleanup_after_callback = true;
+            } else {
+                // An unexpected failure leaves the registration's
+                // relationship with its context uncertain. Retain the
+                // allocation rather than risk a use-after-free.
+                log_unregister_failure(&err);
+            }
+            return;
+        }
+        drop(state);
+
+        // WT_EXECUTEONLYONCE stops future callbacks but does not release the
+        // wait object. INVALID_HANDLE_VALUE waits for a callback that raced the
+        // handshake above; that callback sees `owner_dropping`, invokes no
+        // Waker, and returns without depending on this thread.
+        //
+        // SAFETY: `wait_object` came from successful registration.
+        let unregistered = unsafe { UnregisterWaitEx(self.wait_object, INVALID_HANDLE_VALUE) };
+        if unregistered == 0 {
+            // Freeing after a failed unregister could race a callback and
+            // become a use-after-free. Leak the small context and duplicated
+            // handle instead; this is the only memory-safe recovery.
+            log_unregister_failure(&io::Error::last_os_error());
+            return;
+        }
+
+        // SAFETY: the blocking unregister proves Windows can no longer touch
+        // the callback context.
+        drop(unsafe { Box::from_raw(self.context) });
+    }
+}
+
+/// Completes one registered wait.
+///
+/// # Safety
+///
+/// `raw` must be the live `RegisteredWaitContext` pointer passed at
+/// registration. Windows may call this at most once due to
+/// `WT_EXECUTEONLYONCE`.
+#[cfg(feature = "tokio")]
+unsafe extern "system" fn registered_wait_callback(raw: *mut c_void, _timed_out: bool) {
+    // RawWaker vtables and tracing subscribers are arbitrary user code. No
+    // unwind may cross this Windows callback ABI: Rust aborts the process if
+    // it does. The inner callback catches a Waker panic before its cleanup
+    // tail; this outer boundary contains every other unexpected panic.
+    match catch_callback_unwind(|| {
+        // SAFETY: guaranteed by the registration and callback contract above.
+        unsafe { registered_wait_callback_inner(raw) }
+    }) {
+        Ok(true) => log_callback_panic_safely("registered-wait Waker"),
+        Ok(false) => {},
+        Err(()) => log_callback_panic_safely("registered-wait callback"),
+    }
+}
+
+/// Completes one registered wait while preserving callback-tail cleanup.
+///
+/// Returns whether the installed `Waker` panicked.
+///
+/// # Safety
+///
+/// `raw` must be the live `RegisteredWaitContext` pointer passed at
+/// registration. Windows may call this at most once due to
+/// `WT_EXECUTEONLYONCE`.
+#[cfg(feature = "tokio")]
+unsafe fn registered_wait_callback_inner(raw: *mut c_void) -> bool {
+    // SAFETY: guaranteed by the registration and callback contract above.
+    let context = unsafe { &*raw.cast::<RegisteredWaitContext>() };
+    {
+        let mut state = context.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.owner_dropping {
+            // Drop won the entry handshake. It is already performing a
+            // blocking unregister, so do not invoke a Waker that could depend
+            // on that thread; returning lets the unregister finish.
+            return false;
+        }
+        state.callback_active = true;
+    }
+
+    let result = context.process.exit_code();
+    let waker = {
+        let mut state = context.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.owner_dropping {
+            None
+        } else {
+            state.result = Some(result);
+            state.waker.take()
+        }
+    };
+    // `Waker` delegates to a user-supplied RawWaker vtable. Catch its panic
+    // before the callback tail so reentrant Drop still transfers and completes
+    // context reclamation.
+    let wake_panicked = waker.is_some_and(|waker| catch_callback_unwind(|| waker.wake()).is_err());
+
+    let cleanup = {
+        let mut state = context.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.callback_active = false;
+        state.cleanup_after_callback
+    };
+    if cleanup {
+        // SAFETY: Drop requested nonblocking deletion while this callback was
+        // active and transferred sole reclamation ownership here. This is the
+        // callback tail, so the allocation is not accessed again.
+        drop(unsafe { Box::from_raw(raw.cast::<RegisteredWaitContext>()) });
+    }
+    wake_panicked
+}
+
+/// Runs callback code without permitting an unwind to cross FFI.
+///
+/// A panic payload can contain a user-defined destructor that panics again.
+/// Retaining that payload on the already-exceptional path is the only way to
+/// make this boundary independent of such a destructor.
+fn catch_callback_unwind<T>(operation: impl FnOnce() -> T) -> Result<T, ()> {
+    match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(value) => Ok(value),
+        Err(payload) => {
+            std::mem::forget(payload);
+            Err(())
+        },
+    }
+}
+
+/// Logs a contained callback panic without trusting the tracing subscriber.
+fn log_callback_panic_safely(callback: &'static str) {
+    let _contained = catch_callback_unwind(|| log_callback_panic(callback));
+}
+
+#[cfg(feature = "tracing")]
+fn log_callback_panic(callback: &'static str) {
+    tracing::error!(
+        callback,
+        "contained a panic at a Windows thread-pool callback boundary"
+    );
+}
+
+#[cfg(not(feature = "tracing"))]
+const fn log_callback_panic(_callback: &'static str) {}
+
+fn log_unregister_failure(err: &io::Error) {
+    let _contained = catch_callback_unwind(|| log_unregister_failure_inner(err));
+}
+
+#[cfg(feature = "tracing")]
+fn log_unregister_failure_inner(err: &io::Error) {
+    tracing::error!(
+        error = %err,
+        "failed to unregister process wait; retaining its callback context for safety"
+    );
+}
+
+#[cfg(not(feature = "tracing"))]
+const fn log_unregister_failure_inner(_err: &io::Error) {}
+
 /// Spawns the legacy shutdown watcher for one session.
 ///
 /// `process` must be a *duplicate* of the child's process handle (e.g. from
@@ -128,238 +479,246 @@ impl AsHandle for ProcessWaiter {
 /// `DUPLICATE_SAME_ACCESS`), so the watcher's wait is independent of the
 /// lifetime of the handle the caller keeps for its own `wait`/`kill` API.
 ///
-/// The watcher thread, detached and never joined:
+/// The registered wait and its post-exit worker:
 ///
-/// 1. Waits for the child to exit. Only a `Weak` reference to the lifecycle
-///    core is held during this potentially unbounded wait, so an abandoned
-///    session (every user handle dropped while the child lives on) can still
-///    reach [`ConsoleShared`]'s final-defense drop instead of being pinned
-///    by the watcher.
-/// 2. Sleeps for `grace` (skipped when the reader is already done) to let
+/// 1. Windows waits for the child in its wait pool. No crate thread is parked
+///    for the lifetime of the process. Only a `Weak` reference to the
+///    lifecycle core is retained, so an abandoned session can still reach
+///    [`ConsoleShared`]'s final-defense drop.
+/// 2. After process exit, a short-lived worker sleeps for `grace` (skipped
+///    when the reader is already done) to let
 ///    the reader drain output the console host produced before the exit.
-/// 3. Calls [`ConsoleShared::request_close`]. The watcher thread satisfies
+/// 3. Calls [`ConsoleShared::request_close`]. The post-exit worker satisfies
 ///    that method's contract — a dedicated, non-reader thread that may
 ///    block — and the close breaks the conout pipe, which the reader
 ///    observes as end-of-file.
 ///
-/// If the session is already released, no thread is spawned: end-of-file
+/// If the session is already released, no wait is registered: end-of-file
 /// arrives naturally and closing is handled by the reader-side transitions.
 ///
 /// # Errors
 ///
-/// Returns the OS error if the watcher thread cannot be spawned. The caller
-/// must treat that as fatal for the session (without a watcher, a legacy
-/// session's reader would never see end-of-file).
-pub(crate) fn spawn_legacy_watcher(
+/// Returns the OS error if `RegisterWaitForSingleObject` fails. Failure to
+/// create the post-exit worker is handled inside the registered callback,
+/// which performs the grace and close work itself.
+pub(super) fn spawn_legacy_watcher(
     process: OwnedHandle,
     shared: Arc<ConsoleShared>,
     grace: Duration,
+) -> io::Result<()> {
+    spawn_legacy_watcher_inner(process, shared, grace, true)
+}
+
+#[cfg(test)]
+fn spawn_legacy_watcher_with_worker_spawn_failure(
+    process: OwnedHandle,
+    shared: Arc<ConsoleShared>,
+    grace: Duration,
+) -> io::Result<()> {
+    spawn_legacy_watcher_inner(process, shared, grace, false)
+}
+
+fn spawn_legacy_watcher_inner(
+    process: OwnedHandle,
+    shared: Arc<ConsoleShared>,
+    grace: Duration,
+    spawn_close_worker: bool,
 ) -> io::Result<()> {
     if shared.is_released() {
         return Ok(());
     }
 
-    // Downgrade before the wait; see the doc comment (step 1).
     let weak = Arc::downgrade(&shared);
     drop(shared);
 
-    thread::Builder::new()
-        .name("conpty-oxide-legacy-watcher".into())
-        .spawn(move || {
-            let waiter = ProcessWaiter::new(process);
-            // The result is deliberately ignored: whether the child exited or
-            // the wait itself failed (e.g. a corrupted handle), the only
-            // remedy is the same — tear the console down so the reader is not
-            // left blocked forever.
-            let _ = waiter.wait();
+    let context = Box::into_raw(Box::new(LegacyWaitContext {
+        process: ProcessWaiter::new(process),
+        shared: weak,
+        grace,
+        spawn_close_worker,
+        wait_object: Mutex::new(None),
+        wait_object_ready: Condvar::new(),
+    }));
+    let mut wait_object: HANDLE = ptr::null_mut();
 
-            let Some(shared) = weak.upgrade() else {
-                // Every strong reference is gone; the final-defense drop has
-                // already taken (or is taking) care of the close.
-                return;
-            };
-            if !shared.reader_finished() {
-                thread::sleep(grace);
-            }
-            shared.request_close();
-        })?;
+    // SAFETY: `context` points to the stable allocation created above.
+    let process_handle = unsafe { (*context).process.as_handle().as_raw_handle() };
+    // SAFETY: the callback context is a stable allocation. A successful
+    // registration transfers its cleanup to the callback's worker; failure
+    // below reclaims it immediately.
+    let registered = unsafe {
+        RegisterWaitForSingleObject(
+            &mut wait_object,
+            process_handle,
+            Some(legacy_wait_callback),
+            context.cast(),
+            INFINITE,
+            WT_EXECUTEONLYONCE | WT_EXECUTELONGFUNCTION,
+        )
+    };
+    if registered == 0 {
+        let err = io::Error::last_os_error();
+        // SAFETY: registration failed and Windows retained no pointer.
+        drop(unsafe { Box::from_raw(context) });
+        return Err(err);
+    }
+
+    // Publish the wait handle after registration. A process that was already
+    // signaled may invoke the callback concurrently; the Condvar closes that
+    // narrow race without spinning or reading a partially initialized handle.
+    // SAFETY: the context remains owned by the registered callback.
+    let context_ref = unsafe { &*context };
+    let mut slot = context_ref
+        .wait_object
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    *slot = Some(wait_object);
+    context_ref.wait_object_ready.notify_all();
 
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+struct LegacyWaitContext {
+    /// Keeps the duplicated process handle live for the registered wait.
+    process: ProcessWaiter,
+    shared: Weak<ConsoleShared>,
+    grace: Duration,
+    /// `false` only in the crate-local failure-injection test.
+    spawn_close_worker: bool,
+    wait_object: Mutex<Option<HANDLE>>,
+    wait_object_ready: Condvar,
+}
 
-    use std::fs::File;
-    use std::io::Read;
-    use std::os::windows::io::AsHandle;
-    use std::process::{Child, Command, Stdio};
-    use std::sync::mpsc;
+/// A raw callback context transferred to the post-exit worker.
+struct LegacyContextPtr(*mut LegacyWaitContext);
 
-    use crate::backend::ConPtyBackend;
-    use crate::core::pipes::create_sync_pipes;
-    use crate::core::pseudocon::PseudoConsole;
-    use crate::size::Size;
+// SAFETY: the allocation is synchronized internally and is freed only after a
+// blocking unregister proves the Windows callback has returned.
+unsafe impl Send for LegacyContextPtr {}
 
-    /// `GetExitCodeProcess`'s sentinel for "still running".
-    const STILL_ACTIVE: u32 = 259;
-
-    /// Spawns a `cmd.exe` child with all stdio detached from the test runner.
-    fn spawn_cmd(args: &[&str]) -> Child {
-        Command::new("cmd.exe")
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawning cmd.exe must succeed")
-    }
-
-    /// Duplicates a child's process handle, as the spawn layer will for the
-    /// watcher.
-    fn duplicated_handle(child: &Child) -> OwnedHandle {
-        child
-            .as_handle()
-            .try_clone_to_owned()
-            .expect("DuplicateHandle must succeed")
-    }
-
-    #[test]
-    fn wait_reports_the_exit_code() {
-        let mut child = spawn_cmd(&["/C", "exit 7"]);
-        let waiter = ProcessWaiter::new(duplicated_handle(&child));
-
-        assert_eq!(waiter.wait().expect("wait must succeed"), 7);
-        // A process handle stays signaled: waiting again is fine.
-        assert_eq!(waiter.wait().expect("second wait must succeed"), 7);
-        // And try_wait after exit reports the same code.
-        assert_eq!(waiter.try_wait().expect("try_wait must succeed"), Some(7));
-
-        child.wait().expect("reaping via std must also succeed");
-    }
-
-    #[test]
-    fn try_wait_is_none_while_running_and_some_after_kill() {
-        // `cmd /C pause` blocks reading stdin; the pipe is held open (and
-        // never written) by the test, so the child stays alive until killed.
-        let mut child = Command::new("cmd.exe")
-            .args(["/C", "pause"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawning cmd.exe must succeed");
-        let waiter = ProcessWaiter::new(duplicated_handle(&child));
-
-        assert_eq!(
-            waiter.try_wait().expect("try_wait must succeed"),
-            None,
-            "a blocked child must not report an exit code"
-        );
-
-        child.kill().expect("kill must succeed");
-        let code = waiter.wait().expect("wait after kill must succeed");
-        assert_ne!(
-            code, STILL_ACTIVE,
-            "an exit code read after the wait must never be STILL_ACTIVE"
-        );
-        child.wait().expect("reaping via std must also succeed");
-    }
-
-    #[test]
-    fn legacy_watcher_closes_the_console_after_child_exit() {
-        let backend = ConPtyBackend::system().expect("ConPTY must be available");
-        let pipes = create_sync_pipes().expect("creating pipes must succeed");
-        let console = PseudoConsole::new(
-            backend,
-            Size::default(),
-            pipes.conin_read,
-            pipes.conout_write,
-            false,
-        )
-        .expect("CreatePseudoConsole must succeed");
-        let shared = Arc::clone(console.shared());
-
-        // The child is not attached to the pseudoconsole — the watcher only
-        // watches the process handle, so any process exercises it. The
-        // session is never released, so this is the legacy path even on a
-        // machine whose backend supports release.
-        let mut child = spawn_cmd(&["/C", "exit 0"]);
-        spawn_legacy_watcher(
-            duplicated_handle(&child),
-            Arc::clone(&shared),
-            Duration::from_millis(50),
-        )
-        .expect("spawning the watcher must succeed");
-
-        // Drain conout on its own thread and treat *its* end-of-file as the
-        // pass condition. Polling `is_closed` alone would not do: the state
-        // flips to `Done` before the `ClosePseudoConsole` FFI call runs, so
-        // it only proves the watcher *requested* a close. End-of-file, by
-        // contrast, can only come from the console host exiting — that is,
-        // from the close actually completing — so a regression that wedges
-        // the close inside the watcher thread times out here instead of
-        // passing. The live reader also makes this the watcher's hardest
-        // configuration: it must close from its own thread, with the conout
-        // read end still open, and (on a real pre-24H2 host) block until this
-        // reader has drained.
-        let (eof_tx, eof_rx) = mpsc::channel();
-        let reader = thread::Builder::new()
-            .name("test-conout-reader".into())
-            .spawn(move || {
-                let mut conout = File::from(pipes.conout_read);
-                let mut sink = Vec::new();
-                // A broken pipe reads as end-of-file, so this returns once
-                // the console host is gone.
-                let _ = conout.read_to_end(&mut sink);
-                let _ = eof_tx.send(());
-            })
-            .expect("spawning the reader thread must succeed");
-
-        eof_rx.recv_timeout(Duration::from_secs(5)).expect(
-            "the watcher must complete the close — observed as conout \
-             end-of-file — within 5 seconds",
-        );
-        assert!(shared.is_closed());
-
-        reader.join().expect("the reader thread must not panic");
-        child.wait().expect("reaping via std must succeed");
-        drop(console);
-    }
-
-    #[test]
-    fn legacy_watcher_is_a_no_op_for_released_sessions() {
-        let backend = ConPtyBackend::system().expect("ConPTY must be available");
-        if !backend.supports_release() {
-            return;
-        }
-        let pipes = create_sync_pipes().expect("creating pipes must succeed");
-        let console = PseudoConsole::new(
-            backend,
-            Size::default(),
-            pipes.conin_read,
-            pipes.conout_write,
-            false,
-        )
-        .expect("CreatePseudoConsole must succeed");
-        assert!(console
-            .release_after_spawn()
-            .expect("ReleasePseudoConsole must succeed"));
-
-        let mut child = spawn_cmd(&["/C", "exit 0"]);
-        spawn_legacy_watcher(
-            duplicated_handle(&child),
-            Arc::clone(console.shared()),
-            Duration::from_millis(10),
-        )
-        .expect("the released no-op path must succeed");
-        child.wait().expect("reaping via std must succeed");
-
-        // Give a (hypothetical, buggy) watcher thread time to act, then
-        // confirm nothing closed the console behind our back.
-        thread::sleep(Duration::from_millis(100));
-        assert!(!console.shared().is_closed());
-        drop(console);
+/// Runs after the root process becomes signaled.
+///
+/// # Safety
+///
+/// `raw` is the live `LegacyWaitContext` supplied during registration.
+unsafe extern "system" fn legacy_wait_callback(raw: *mut c_void, _timed_out: bool) {
+    // Thread creation, teardown diagnostics, and tracing can all reach
+    // external code. Keep every unwind on the Rust side of the Windows ABI.
+    if catch_callback_unwind(|| {
+        // SAFETY: guaranteed by the registration and callback contract above.
+        unsafe { legacy_wait_callback_inner(raw) }
+    })
+    .is_err()
+    {
+        log_callback_panic_safely("legacy-wait callback");
     }
 }
+
+/// Runs the legacy post-exit transition from its registered callback.
+///
+/// # Safety
+///
+/// `raw` is the live `LegacyWaitContext` supplied during registration.
+unsafe fn legacy_wait_callback_inner(raw: *mut c_void) {
+    let pointer = LegacyContextPtr(raw.cast());
+    let worker_pointer = LegacyContextPtr(pointer.0);
+    // SAFETY: the callback contract keeps the context live.
+    let context = unsafe { &*pointer.0 };
+    let spawned = if context.spawn_close_worker {
+        thread::Builder::new()
+            .name("conpty-oxide-legacy-close".into())
+            .spawn(move || {
+                // SAFETY: ownership of cleanup was transferred to this worker.
+                unsafe { finish_legacy_wait(&worker_pointer) };
+            })
+    } else {
+        Err(io::Error::other(
+            "legacy close worker spawn failure injected by a crate-local test",
+        ))
+    };
+
+    if let Err(err) = spawned {
+        // Thread creation failure must not leave legacy conout waiting forever.
+        // The LONGFUNCTION callback is permitted to perform the grace and close
+        // work itself. It cannot use blocking UnregisterWaitEx from inside its
+        // own callback, so request nonblocking unregistration and retain the
+        // context: freeing it before this callback returns would be unsound.
+        finish_legacy_close(context);
+        let wait_object = legacy_wait_object(context);
+        // SAFETY: the wait object belongs to this registration. A null
+        // completion event is the callback-safe, nonblocking form.
+        let _ = unsafe { UnregisterWaitEx(wait_object, ptr::null_mut()) };
+        log_legacy_worker_failure(&err);
+    }
+}
+
+/// Performs post-exit close and reclaims the registered wait.
+///
+/// # Safety
+///
+/// `pointer` must name the live context for the current registration, and the
+/// calling worker
+/// function must be its sole cleanup owner.
+unsafe fn finish_legacy_wait(pointer: &LegacyContextPtr) {
+    // SAFETY: guaranteed by this function's contract.
+    let context = unsafe { &*pointer.0 };
+    finish_legacy_close(context);
+    let wait_object = legacy_wait_object(context);
+    // SAFETY: this worker is not the registered callback. The blocking form
+    // waits until that callback returns before permitting the context to free.
+    let unregistered = unsafe { UnregisterWaitEx(wait_object, INVALID_HANDLE_VALUE) };
+    if unregistered != 0 {
+        // SAFETY: no callback can access the allocation after successful
+        // blocking unregistration.
+        drop(unsafe { Box::from_raw(pointer.0) });
+    } else {
+        log_unregister_failure(&io::Error::last_os_error());
+    }
+}
+
+fn finish_legacy_close(context: &LegacyWaitContext) {
+    let Some(shared) = context.shared.upgrade() else {
+        return;
+    };
+    if !shared.reader_finished() {
+        thread::sleep(context.grace);
+    }
+    shared.request_close();
+}
+
+fn legacy_wait_object(context: &LegacyWaitContext) -> HANDLE {
+    let mut slot = context
+        .wait_object
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    loop {
+        if let Some(wait_object) = *slot {
+            return wait_object;
+        }
+        slot = context
+            .wait_object_ready
+            .wait(slot)
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+}
+
+fn log_legacy_worker_failure(err: &io::Error) {
+    let _contained = catch_callback_unwind(|| {
+        log_legacy_worker_failure_inner(err);
+    });
+}
+
+#[cfg(feature = "tracing")]
+fn log_legacy_worker_failure_inner(err: &io::Error) {
+    tracing::error!(
+        error = %err,
+        "failed to spawn legacy close worker; completed close in callback and retained context"
+    );
+}
+
+#[cfg(not(feature = "tracing"))]
+const fn log_legacy_worker_failure_inner(_err: &io::Error) {}
+
+#[cfg(test)]
+#[path = "wait_tests.rs"]
+mod tests;

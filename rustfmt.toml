@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+edition = "2021"
+hard_tabs = false
+match_block_trailing_comma = true
+max_width = 100
+newline_style = "Unix"
+tab_spaces = 4
+use_field_init_shorthand = true
+use_small_heuristics = "Default"

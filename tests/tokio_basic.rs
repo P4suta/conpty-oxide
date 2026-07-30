@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! End-to-end smoke tests for the asynchronous API.
 //!
 //! These answer the first questions anyone has about an async pseudoconsole
@@ -5,20 +9,25 @@
 //! is this actually a *console* rather than a plain redirected pipe, and can
 //! the two directions really be driven from separate tasks at the same time?
 //!
-//! Every test here holds two guards. `asyn::within` is the ordinary timeout
+//! Every test here holds two guards. `tokio_support::within` is the ordinary
+//! timeout
 //! and reports a stalled session as one named failure; `helpers::watchdog`
 //! kills the process, and is the only thing that helps when a destructor
 //! blocks the runtime thread and takes the timer with it.
 
 #![cfg(all(windows, feature = "tokio"))]
 
-mod helpers;
+pub mod helpers;
 
-use std::time::Duration;
+use std::io;
+use std::sync::{Arc, Barrier};
+use std::thread;
+use std::time::{Duration, Instant};
 
-use conpty_oxide::{Command, Error, ExitStatus, Size};
+use conpty_oxide::tokio::Command;
+use conpty_oxide::{ErrorKind, ExitStatus, SessionOptions, Size};
 
-use helpers::asyn::{pty, pty_with_size, within, Session};
+use helpers::tokio_support::{within, Session};
 use helpers::{expected_size, reported_size, watchdog};
 
 /// Outer guard. Only a genuine deadlock gets anywhere near this.
@@ -30,6 +39,17 @@ const DEADLINE: Duration = Duration::from_secs(30);
 
 /// How long an interactive shell gets to answer a typed command.
 const ANSWER: Duration = Duration::from_secs(15);
+
+/// Number of independently synchronized resize pairs used to exercise the
+/// controller's cross-thread ordering.
+const CONCURRENT_ROUNDS: u16 = 12;
+
+/// Maximum time the resize racer may take to observe session shutdown.
+const CLOSE_RACE_BUDGET: Duration = Duration::from_secs(10);
+
+fn size(rows: u16, cols: u16) -> Size {
+    Size::try_new(rows, cols).expect("test dimensions must be valid")
+}
 
 /// The escape character that introduces every ANSI sequence.
 const ESC: u8 = 0x1b;
@@ -155,17 +175,20 @@ async fn an_interactive_session_ends_when_the_shell_exits() {
 async fn the_child_observes_a_resize() {
     let _watchdog = watchdog(BUDGET);
     within("the_child_observes_a_resize", DEADLINE, async {
-        let initial = Size::new(24, 80);
-        let resized = Size::new(30, 100);
+        let initial = size(24, 80);
+        let resized = size(30, 100);
 
-        let mut session = Session::start_in(pty_with_size(initial), &mut Command::new("cmd.exe"));
+        let mut session = Session::start_with(
+            &mut Command::new("cmd.exe"),
+            SessionOptions::new().size(initial),
+        );
         session.output.wait_for(">", ANSWER).await;
 
         session.write_line("mode con");
         session
             .output
             .wait_until_rendered("the session's initial size", ANSWER, |text| {
-                reported_size(text) == expected_size(initial)
+                reported_size(text) == Some(expected_size(initial))
             })
             .await;
 
@@ -179,7 +202,7 @@ async fn the_child_observes_a_resize() {
         session
             .output
             .wait_until_rendered("the resized dimensions", ANSWER, |text| {
-                reported_size(text) == expected_size(resized)
+                reported_size(text) == Some(expected_size(resized))
             })
             .await;
 
@@ -187,6 +210,150 @@ async fn the_child_observes_a_resize() {
         let (_output, status) = session.finish().await;
         assert!(status.success(), "unexpected status: {status}");
     })
+    .await;
+}
+
+/// Concurrent successful resizes must have one total order shared by the
+/// controller's cached size and the console host.
+#[tokio::test]
+async fn concurrent_resizes_keep_the_controller_and_child_in_sync() {
+    let _watchdog = watchdog(BUDGET);
+    within(
+        "concurrent_resizes_keep_the_controller_and_child_in_sync",
+        DEADLINE,
+        async {
+            let initial = size(18, 70);
+            let mut session = Session::start_with(
+                &mut Command::new("cmd.exe"),
+                SessionOptions::new().size(initial),
+            );
+            session.output.wait_for(">", ANSWER).await;
+
+            for round in 0..CONCURRENT_ROUNDS {
+                let first = size(20 + round * 2, 80 + round * 2);
+                let second = size(21 + round * 2, 81 + round * 2);
+                let gate = Arc::new(Barrier::new(3));
+
+                let first_controller = session.controller.clone();
+                let first_gate = Arc::clone(&gate);
+                let first_resize = thread::spawn(move || {
+                    first_gate.wait();
+                    first_controller.resize(first)
+                });
+
+                let second_controller = session.controller.clone();
+                let second_gate = Arc::clone(&gate);
+                let second_resize = thread::spawn(move || {
+                    second_gate.wait();
+                    second_controller.resize(second)
+                });
+
+                gate.wait();
+                first_resize
+                    .join()
+                    .expect("the first resize thread must not panic")
+                    .expect("the first concurrent resize must succeed");
+                second_resize
+                    .join()
+                    .expect("the second resize thread must not panic")
+                    .expect("the second concurrent resize must succeed");
+
+                let recorded = session.controller.size();
+                assert!(
+                    recorded == first || recorded == second,
+                    "the controller recorded a size no caller submitted: {recorded}"
+                );
+
+                session.write_line("mode con");
+                session
+                    .output
+                    .wait_until_rendered("one of the concurrent sizes", ANSWER, |text| {
+                        let observed = reported_size(text);
+                        observed == Some(expected_size(first))
+                            || observed == Some(expected_size(second))
+                    })
+                    .await;
+                assert_eq!(
+                    reported_size(&session.output.text()),
+                    Some(expected_size(recorded)),
+                    "controller.size() diverged from the child after concurrent resizes"
+                );
+            }
+
+            session.write_line("exit");
+            let (_output, status) = session.finish().await;
+            assert!(status.success(), "unexpected status: {status}");
+        },
+    )
+    .await;
+}
+
+/// Root exit and resize are allowed to overlap, but teardown must serialize
+/// the backend call and normalize the first post-close failure.
+#[tokio::test]
+async fn resize_racing_session_close_transitions_to_not_connected() {
+    let _watchdog = watchdog(BUDGET);
+    within(
+        "resize_racing_session_close_transitions_to_not_connected",
+        DEADLINE,
+        async {
+            let session = Session::start(Command::new("cmd.exe").args([
+                "/d",
+                "/c",
+                "ping",
+                "-n",
+                "3",
+                "127.0.0.1",
+            ]));
+            let Session {
+                mut child,
+                output,
+                input,
+                controller,
+            } = session;
+
+            let racer = thread::spawn(move || {
+                let deadline = Instant::now() + CLOSE_RACE_BUDGET;
+                let mut next = size(24, 80);
+                loop {
+                    match controller.resize(next) {
+                        Ok(()) => {
+                            next = if next == size(24, 80) {
+                                size(25, 81)
+                            } else {
+                                size(24, 80)
+                            };
+                        },
+                        Err(err) if err.kind() == ErrorKind::Resize => {
+                            return err
+                                .io_error()
+                                .expect("resize failures retain their I/O error")
+                                .kind();
+                        },
+                        Err(other) => panic!("unexpected resize failure during close: {other}"),
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "resize never observed the closing session"
+                    );
+                    thread::sleep(Duration::from_millis(2));
+                }
+            });
+
+            let status = child
+                .wait()
+                .await
+                .expect("waiting for the probe must succeed");
+            assert!(status.success(), "unexpected status: {status}");
+            output.join().await;
+
+            assert_eq!(
+                racer.join().expect("the resize racer must not panic"),
+                io::ErrorKind::NotConnected
+            );
+            input.close().await;
+        },
+    )
     .await;
 }
 
@@ -207,10 +374,8 @@ async fn clearing_agrees_with_the_capability_query() {
             const BEFORE: &str = "conpty-oxide-async-before-clear";
             const AFTER: &str = "conpty-oxide-async-after-clear";
 
-            let pty = pty();
-            let supported = pty.supports_clear();
-            let mut session = Session::start_in(pty, &mut Command::new("cmd.exe"));
-            assert_eq!(session.controller.supports_clear(), supported);
+            let mut session = Session::start(&mut Command::new("cmd.exe"));
+            let supported = session.controller.supports_clear();
 
             session.output.wait_for(">", ANSWER).await;
             session.write_line(&format!("echo {BEFORE}"));
@@ -221,14 +386,14 @@ async fn clearing_agrees_with_the_capability_query() {
                     supported,
                     "clear succeeded on a backend that reports no clear support"
                 ),
-                Err(Error::UnsupportedFeature { feature }) => {
+                Err(err) if err.kind() == ErrorKind::UnsupportedFeature => {
                     assert!(
                         !supported,
                         "clear was refused as unsupported on a backend that reports \
                      clear support"
                     );
-                    assert_eq!(feature, "ClearPseudoConsole");
-                }
+                    assert!(err.to_string().contains("ClearPseudoConsole"));
+                },
                 Err(other) => panic!("clearing the console failed: {other}"),
             }
 

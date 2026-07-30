@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The half of a session that does not depend on how bytes are moved.
 //!
 //! The two front ends differ only in their I/O: the blocking one owns
@@ -9,7 +13,7 @@
 //!
 //! # The spawn order
 //!
-//! [`spawn_root`] performs the three steps ConPTY requires, in this order and
+//! [`spawn_root`] performs the three steps `ConPTY` requires, in this order and
 //! no other:
 //!
 //! 1. Create the job object and the process. Until the child exists there is
@@ -18,8 +22,8 @@
 //!    host its own lifetime back so it exits when its last client disconnects
 //!    — which is what makes the output pipe reach end-of-file naturally.
 //! 3. Only if the release did not happen (old Windows, or a failed call),
-//!    start the legacy watcher that forces end-of-file when the root child
-//!    exits.
+//!    register the legacy process wait that forces end-of-file after the root
+//!    child exits.
 //!
 //! Doing 2 before 1 would release a console that has no client yet; skipping 3
 //! on a legacy backend would leave a reader waiting for an end-of-file that
@@ -27,9 +31,9 @@
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
-use crate::backend::{BackendKind, ConPtyBackend};
+use crate::backend::BackendKind;
 use crate::command::Command;
 use crate::core::job::Job;
 use crate::core::proc::{self, SpawnedChild};
@@ -45,7 +49,7 @@ use crate::size::Size;
 /// `TerminateProcess`.
 pub(crate) const KILL_EXIT_CODE: u32 = 1;
 
-/// Capability name reported by [`Error::UnsupportedFeature`] when the backend
+/// Capability name reported with [`crate::ErrorKind::UnsupportedFeature`] when the backend
 /// cannot clear the pseudoconsole.
 pub(crate) const CLEAR_FEATURE: &str = "ClearPseudoConsole";
 
@@ -59,9 +63,6 @@ pub(crate) const CLEAR_FEATURE: &str = "ClearPseudoConsole";
 #[derive(Debug)]
 pub(crate) struct Session {
     console: PseudoConsole,
-    backend: ConPtyBackend,
-    /// Last size that `ResizePseudoConsole` accepted.
-    size: Mutex<Size>,
     eof_on_root_exit: bool,
     /// Whether a root child has been spawned into this pseudoconsole.
     ///
@@ -75,16 +76,9 @@ pub(crate) struct Session {
 impl Session {
     /// Wraps a freshly created pseudoconsole together with the settings the
     /// session was built with.
-    pub(crate) fn new(
-        console: PseudoConsole,
-        backend: ConPtyBackend,
-        size: Size,
-        eof_on_root_exit: bool,
-    ) -> Self {
+    pub(crate) const fn new(console: PseudoConsole, eof_on_root_exit: bool) -> Self {
         Self {
             console,
-            backend,
-            size: Mutex::new(size),
             eof_on_root_exit,
             spawned: AtomicBool::new(false),
         }
@@ -93,42 +87,45 @@ impl Session {
     /// Returns the size last accepted by [`Session::resize`], or the size the
     /// session was built with.
     pub(crate) fn size(&self) -> Size {
-        *self.size.lock().unwrap_or_else(PoisonError::into_inner)
+        self.console.size()
     }
 
     /// Resizes the pseudoconsole and records the new size.
     pub(crate) fn resize(&self, size: Size) -> Result<()> {
-        self.console.resize(size).map_err(Error::Resize)?;
-        *self.size.lock().unwrap_or_else(PoisonError::into_inner) = size;
-        Ok(())
+        self.console.resize(size).map_err(Error::resize)
     }
 
     /// Clears the pseudoconsole's screen and scrollback.
     pub(crate) fn clear(&self) -> Result<()> {
         // Asked before the call so a missing capability is reported as such
         // rather than as an opaque I/O failure.
-        if !self.backend.supports_clear() {
-            return Err(Error::UnsupportedFeature {
-                feature: CLEAR_FEATURE,
-            });
+        if !self.console.supports_clear() {
+            return Err(Error::unsupported_feature(CLEAR_FEATURE));
         }
-        self.console.clear().map_err(Error::Clear)
+        self.console.clear().map_err(Error::clear)
     }
 
     /// Returns whether [`Session::clear`] is available on this backend.
     pub(crate) fn supports_clear(&self) -> bool {
-        self.backend.supports_clear()
+        self.console.supports_clear()
     }
 
     /// Returns whether this session's backend exports
     /// `ReleasePseudoConsole`; see `ConPtyBackend::supports_release`.
+    #[cfg(test)]
     pub(crate) fn supports_release(&self) -> bool {
-        self.backend.supports_release()
+        self.console.supports_release()
     }
 
-    /// Returns which ConPTY implementation backs this session.
+    /// Returns whether the conout reader has retired or observed EOF.
+    #[cfg(test)]
+    pub(crate) fn reader_finished(&self) -> bool {
+        self.console.shared().reader_finished()
+    }
+
+    /// Returns which `ConPTY` implementation backs this session.
     pub(crate) fn backend_kind(&self) -> &BackendKind {
-        self.backend.kind()
+        self.console.backend_kind()
     }
 }
 
@@ -139,13 +136,13 @@ impl Session {
 #[derive(Debug)]
 pub(crate) struct RootChild {
     /// Exit detection for the root process itself.
-    pub(crate) waiter: ProcessWaiter,
+    pub(super) waiter: ProcessWaiter,
     /// The job object the child and all its descendants belong to.
-    pub(crate) job: Job,
+    pub(super) job: Job,
     /// The root child's process identifier.
-    pub(crate) pid: u32,
+    pub(super) pid: u32,
     /// Whether the front end's `Child::drop` should terminate the tree.
-    pub(crate) kill_on_drop: bool,
+    pub(super) kill_on_drop: bool,
 }
 
 /// Spawns `command` as the root child of `session` and arms the session's
@@ -162,12 +159,16 @@ pub(crate) struct RootChild {
 ///
 /// # Errors
 ///
-/// [`Error::Spawn`] carrying the program name and the underlying failure:
+/// [`crate::ErrorKind::Spawn`] carrying the program name and the underlying failure:
 /// [`io::ErrorKind::NotFound`] for a missing executable,
 /// [`io::ErrorKind::InvalidInput`] for a command line or environment block
 /// that cannot be built, [`io::ErrorKind::AlreadyExists`] for a re-used
 /// session, or the raw OS error from `CreateProcessW`.
-pub(crate) fn spawn_root(session: &Session, command: &Command) -> Result<RootChild> {
+pub(crate) fn spawn_root(
+    session: &Session,
+    command: &Command,
+    kill_on_drop: bool,
+) -> Result<RootChild> {
     if session.spawned.swap(true, Ordering::SeqCst) {
         return Err(spawn_error(
             command,
@@ -178,7 +179,6 @@ pub(crate) fn spawn_root(session: &Session, command: &Command) -> Result<RootChi
         ));
     }
 
-    let kill_on_drop = command.get_kill_on_drop();
     let (job, spawned) = match create_child(session, command, kill_on_drop) {
         Ok(started) => started,
         Err(err) => {
@@ -186,7 +186,7 @@ pub(crate) fn spawn_root(session: &Session, command: &Command) -> Result<RootChi
             // the session is untouched and can be used for another attempt.
             session.spawned.store(false, Ordering::SeqCst);
             return Err(spawn_error(command, err));
-        }
+        },
     };
 
     // Step two of the lifecycle, immediately after the child exists: hand the
@@ -199,19 +199,21 @@ pub(crate) fn spawn_root(session: &Session, command: &Command) -> Result<RootChi
             // indistinguishable from a backend without the export.
             log_release_failure(&err);
             false
-        }
+        },
     };
 
     // Step three, only for sessions that could not be released: force
     // end-of-file when the root child exits.
-    if !released && session.eof_on_root_exit {
+    if should_arm_legacy_watcher(released, session.eof_on_root_exit) {
         if let Err(err) = arm_legacy_watcher(session, &spawned) {
             // A legacy session without a watcher could never reach
             // end-of-file, so this is fatal. Terminate the child rather than
             // return a session that can never finish; `spawned` deliberately
             // stays `true`, because a child was attached to the pseudoconsole
             // — the session is retired, not reusable.
-            let _ = job.terminate(KILL_EXIT_CODE);
+            if let Err(kill_err) = job.terminate(KILL_EXIT_CODE) {
+                log_spawn_cleanup_failure(&kill_err);
+            }
             return Err(spawn_error(command, err));
         }
     }
@@ -222,6 +224,15 @@ pub(crate) fn spawn_root(session: &Session, command: &Command) -> Result<RootChi
         pid: spawned.pid,
         kill_on_drop,
     })
+}
+
+/// Returns whether this session needs the root-exit watcher that forces EOF.
+///
+/// Keeping the two independent conditions explicit and truth-table tested is
+/// important: released sessions reach EOF naturally, while opting out on a
+/// legacy session deliberately leaves the reader open after root exit.
+const fn should_arm_legacy_watcher(released: bool, eof_on_root_exit: bool) -> bool {
+    !released && eof_on_root_exit
 }
 
 /// Creates the job object and the process itself.
@@ -253,10 +264,7 @@ fn arm_legacy_watcher(session: &Session, spawned: &SpawnedChild) -> io::Result<(
 
 /// Wraps a spawn failure with the program that could not be started.
 fn spawn_error(command: &Command, source: io::Error) -> Error {
-    Error::Spawn {
-        program: command.get_program().to_os_string(),
-        source,
-    }
+    Error::spawn(command.get_program().to_os_string(), source)
 }
 
 /// Reports a failed `ReleasePseudoConsole`.
@@ -265,14 +273,54 @@ fn spawn_error(command: &Command, source: io::Error) -> Error {
 /// shutdown path, which restores the same end-of-file contract. It is logged
 /// (with the `tracing` feature) because a silent demotion would make the
 /// resulting one-second teardown delay look like a bug.
+#[cfg(feature = "tracing")]
 fn log_release_failure(err: &io::Error) {
-    #[cfg(feature = "tracing")]
     tracing::warn!(
         error = %err,
         "ReleasePseudoConsole failed; the session falls back to the legacy shutdown path"
     );
-    #[cfg(not(feature = "tracing"))]
-    {
-        let _ = err;
+}
+
+/// Discards a release failure when diagnostics are disabled.
+#[cfg(not(feature = "tracing"))]
+const fn log_release_failure(_err: &io::Error) {}
+
+#[cfg(feature = "tracing")]
+fn log_spawn_cleanup_failure(err: &io::Error) {
+    tracing::error!(
+        error = %err,
+        "failed to terminate a child after legacy watcher setup failed"
+    );
+}
+
+#[cfg(not(feature = "tracing"))]
+const fn log_spawn_cleanup_failure(_err: &io::Error) {}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "tracing")]
+    use std::io;
+
+    use super::should_arm_legacy_watcher;
+    #[cfg(feature = "tracing")]
+    use super::{log_release_failure, log_spawn_cleanup_failure};
+
+    #[test]
+    fn legacy_watcher_requires_both_legacy_mode_and_eof_policy() {
+        assert!(should_arm_legacy_watcher(false, true));
+        assert!(!should_arm_legacy_watcher(false, false));
+        assert!(!should_arm_legacy_watcher(true, true));
+        assert!(!should_arm_legacy_watcher(true, false));
+    }
+
+    #[cfg(feature = "tracing")]
+    #[test]
+    fn lifecycle_fallback_failures_are_logged() {
+        let error = io::Error::other("injected lifecycle failure");
+        let events = crate::tracing_test_support::count_events(|| {
+            log_release_failure(&error);
+            log_spawn_cleanup_failure(&error);
+        });
+        assert_eq!(events, 2);
     }
 }

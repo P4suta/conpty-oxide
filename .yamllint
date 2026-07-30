@@ -1,11 +1,10 @@
-extends: default
+---
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
-ignore: |
-  target/
+extends: default
+ignore-from-file: .gitignore
 
 rules:
-  document-start: disable
   line-length:
     max: 120
-  truthy:
-    allowed-values: ["true", "false", "on"]

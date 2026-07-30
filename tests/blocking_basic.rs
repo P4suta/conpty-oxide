@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! End-to-end smoke tests for the blocking API.
 //!
 //! These answer the first three questions anyone has about a pseudoconsole
@@ -6,13 +10,14 @@
 
 #![cfg(all(windows, feature = "blocking"))]
 
-mod helpers;
+pub mod helpers;
 
 use std::time::Duration;
 
 use conpty_oxide::blocking::Command;
 
-use helpers::{with_timeout, Session};
+use helpers::sync::Session;
+use helpers::with_timeout;
 
 /// Per-test budget. Spawning `cmd.exe` under a fresh pseudoconsole takes a few
 /// hundred milliseconds at worst; anything approaching this is a deadlock.

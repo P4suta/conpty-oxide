@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Interactive async example: run a shell inside a pseudoconsole and relay
 //! this terminal's input and output to it.
 //!
@@ -24,18 +28,18 @@
 //!   abandoned at exit, whereas a blocking task would hold up the runtime's
 //!   shutdown until somebody pressed a key.
 
-use std::error::Error;
 use std::io::{self, Read, Write};
 use std::thread;
 
-use conpty_oxide::{Command, Pty, Size};
+use conpty_oxide::tokio::Command;
+use conpty_oxide::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Program launched when none is given on the command line.
 const DEFAULT_SHELL: &str = "powershell.exe";
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
     let shell = std::env::args().nth(1).unwrap_or_else(|| {
         // `powershell.exe` ships with every supported Windows version; the
         // argument is there for `cmd.exe`, `pwsh.exe`, or anything else.
@@ -44,9 +48,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Must happen inside the runtime: the session's pipes are registered with
     // its I/O driver.
-    let pty = Pty::builder().size(Size::new(24, 80)).build()?;
-    let mut child = Command::new(&shell).spawn(&pty)?;
-    let (mut reader, mut writer, _controller) = pty.into_split();
+    let parts = Command::new(&shell).spawn()?.into_parts();
+    let mut child = parts.child;
+    let mut reader = parts.output;
+    let mut writer = parts.input;
+    let _controller = parts.controller;
 
     // Console output -> our stdout. This task ends at end-of-file, which the
     // crate produces once the session is over on every supported Windows
@@ -92,20 +98,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // write half deliberately stays alive. Dropping it here would tell the
         // console host that the terminal went away and kill the shell before
         // it had run the input it already received.
-        std::future::pending::<()>().await
+        std::future::pending::<()>().await;
     });
 
     let status = child.wait().await?;
     // Returns at end-of-file, which the crate guarantees once the session is
     // over on every supported Windows version.
-    output.await??;
+    output.await.map_err(io::Error::other)??;
 
     // The stdin relay is parked in a console read that cannot be cancelled, so
     // the input task can never finish on its own. Aborting it drops the write
     // half — the deliberate end of the session, and harmless now that the
     // child has already exited.
     input.abort();
-    let _ = input.await;
+    match input.await {
+        Err(error) if error.is_cancelled() => {},
+        Err(error) => return Err(io::Error::other(error).into()),
+        Ok(()) => {},
+    }
 
     println!("{shell} exited: {status}");
     Ok(())

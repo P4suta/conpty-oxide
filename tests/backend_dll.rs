@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The bundled `conpty.dll` backend, driven against a real DLL.
 //!
 //! Every other test in this directory runs on whatever ConPTY the operating
@@ -28,7 +32,7 @@
 
 #![cfg(all(windows, feature = "blocking"))]
 
-mod helpers;
+pub mod helpers;
 
 use std::env;
 use std::fs;
@@ -37,12 +41,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use conpty_oxide::blocking::{Command, Pty};
-use conpty_oxide::{BackendError, BackendKind, ConPtyBackend, Error, Size};
+use conpty_oxide::blocking::Command;
+use conpty_oxide::{BackendErrorKind, ConPtyBackend, ErrorKind, SessionOptions, Size};
 
+use helpers::sync::Session;
 use helpers::{
     expected_size, process_is_running, reported_size, strip_escapes, wait_for_descendant,
-    wait_until, with_timeout, Session,
+    wait_until, with_timeout,
 };
 
 /// Names the directory holding the `conpty.dll` bundle to test against.
@@ -58,6 +63,10 @@ const ANSWER: Duration = Duration::from_secs(15);
 
 /// How long a process gets to appear in, or disappear from, the process list.
 const SETTLE: Duration = Duration::from_secs(10);
+
+fn size(rows: u16, cols: u16) -> Size {
+    Size::try_new(rows, cols).expect("test dimensions must be valid")
+}
 
 /// The directory the suite was pointed at, if any.
 fn bundle_dir() -> Option<PathBuf> {
@@ -90,43 +99,25 @@ fn bundle() -> Option<ConPtyBackend> {
     Some(backend)
 }
 
-/// Builds a default 24x80 session on the bundle.
-fn bundle_pty() -> Option<Pty> {
-    bundle_pty_with_size(Size::new(24, 80))
+/// Builds default managed options for the bundle.
+fn bundle_options() -> Option<SessionOptions> {
+    bundle_options_with_size(size(24, 80))
 }
 
-/// Builds a session of the given size on the bundle.
-fn bundle_pty_with_size(size: Size) -> Option<Pty> {
-    let pty = Pty::builder()
-        .backend(bundle()?)
-        .size(size)
-        .build()
-        .expect("building a session on the bundle must succeed");
-    Some(pty)
+/// Builds managed options of the given size for the bundle.
+fn bundle_options_with_size(size: Size) -> Option<SessionOptions> {
+    Some(SessionOptions::new().backend(bundle()?).size(size))
 }
 
-/// Builds a session on the bundle with `ReleasePseudoConsole` stripped.
+/// Builds a session from a backend clone after dropping the original.
 ///
-/// The original backend is dropped before the session is built, which makes
-/// this the pointed test of the module pin: `without_release` copies raw entry
-/// point addresses out of the loaded `conpty.dll`, and the only thing keeping
-/// that DLL mapped afterwards is the pin the stripped clone shares. If the
-/// pin were missing, `FreeLibrary` would run here and every later call would
-/// jump into unmapped memory.
-fn legacy_bundle_pty() -> Option<Pty> {
+/// This directly tests that cloned backends share the module pin.
+fn cloned_bundle_options() -> Option<SessionOptions> {
     let backend = bundle()?;
-    let legacy = backend.without_release();
+    let clone = backend.clone();
     drop(backend);
 
-    assert!(
-        !legacy.supports_release(),
-        "the forced-legacy clone must not report a release export"
-    );
-    let pty = Pty::builder()
-        .backend(legacy)
-        .build()
-        .expect("building a forced-legacy session on the bundle must succeed");
-    Some(pty)
+    Some(SessionOptions::new().backend(clone))
 }
 
 /// A scratch directory that is removed when the guard is dropped.
@@ -162,39 +153,10 @@ impl Drop for TempDir {
 }
 
 #[test]
-fn the_bundle_loads_and_names_the_dll_it_loaded() {
+fn the_bundle_loads_from_the_requested_directory() {
     let Some(backend) = bundle() else { return };
-
-    let BackendKind::External { dll } = backend.kind() else {
-        panic!("a backend loaded from a directory must report itself as external");
-    };
-    assert!(
-        dll.is_absolute(),
-        "the reported path must be absolute so it stays meaningful after a \
-         change of working directory: {}",
-        dll.display()
-    );
-    assert!(dll.is_file(), "{} must exist", dll.display());
-    assert_eq!(
-        dll.file_name().and_then(|name| name.to_str()),
-        Some("conpty.dll")
-    );
-}
-
-/// `ReleasePseudoConsole` has been part of `conpty.dll` since long before the
-/// package this suite pins, so a bundle that does not export it is a bundle
-/// that was assembled wrongly — the entry point was resolved from the wrong
-/// file, or the wrong architecture's DLL was laid out.
-#[test]
-fn the_bundle_exports_release_whatever_the_operating_system_supports() {
-    let Some(backend) = bundle() else { return };
-
-    assert!(
-        backend.supports_release(),
-        "a bundled conpty.dll must export ReleasePseudoConsole, so a session \
-         on it uses the released lifecycle even on a Windows version whose \
-         own ConPTY predates it"
-    );
+    let rendered = format!("{backend:?}");
+    assert!(rendered.contains("ConPtyBackend"), "{rendered}");
 }
 
 /// `ConptyClearPseudoConsole` is declared in the package's own `conpty.h` and
@@ -221,12 +183,17 @@ fn the_bundle_exports_clear_except_on_32_bit_x86() {
 
 #[test]
 fn echoed_text_comes_back_with_a_successful_status_from_the_bundle() {
-    let Some(pty) = bundle_pty() else { return };
+    let Some(options) = bundle_options() else {
+        return;
+    };
     with_timeout(BUDGET, || {
         const MARKER: &str = "conpty-oxide-bundle-echo";
 
-        let (output, status) =
-            Session::start_in(pty, Command::new("cmd.exe").args(["/c", "echo", MARKER])).finish();
+        let (output, status) = Session::start_with(
+            Command::new("cmd.exe").args(["/c", "echo", MARKER]),
+            options,
+        )
+        .finish();
 
         assert!(
             output.contains(MARKER),
@@ -239,10 +206,13 @@ fn echoed_text_comes_back_with_a_successful_status_from_the_bundle() {
 
 #[test]
 fn a_nonzero_exit_code_is_reported_verbatim_from_the_bundle() {
-    let Some(pty) = bundle_pty() else { return };
+    let Some(options) = bundle_options() else {
+        return;
+    };
     with_timeout(BUDGET, || {
         let (_output, status) =
-            Session::start_in(pty, Command::new("cmd.exe").args(["/c", "exit", "42"])).finish();
+            Session::start_with(Command::new("cmd.exe").args(["/c", "exit", "42"]), options)
+                .finish();
 
         assert_eq!(status.code(), 42);
         assert!(!status.success());
@@ -255,14 +225,18 @@ fn a_nonzero_exit_code_is_reported_verbatim_from_the_bundle() {
 /// The write half is deliberately kept open throughout. Closing it would make
 /// the console host tear the session down by itself, which produces
 /// end-of-file even when the crate's own shutdown path is broken.
-fn reading_past_the_child_exit_reaches_eof_in(pty: Pty) {
+fn reading_past_the_child_exit_reaches_eof_in(options: SessionOptions) {
     const MARKER: &str = "conpty-oxide-bundle-eof-marker";
 
-    let mut child = Command::new("cmd.exe")
+    let parts = Command::new("cmd.exe")
         .args(["/c", "echo", MARKER])
-        .spawn(&pty)
-        .expect("spawning must succeed");
-    let (mut reader, writer, controller) = pty.into_split();
+        .spawn_with(options)
+        .expect("spawning must succeed")
+        .into_parts();
+    let mut child = parts.child;
+    let mut reader = parts.output;
+    let writer = parts.input;
+    let controller = parts.controller;
 
     let status = child.wait().expect("waiting must succeed");
     assert!(status.success(), "unexpected status: {status}");
@@ -289,33 +263,35 @@ fn reading_past_the_child_exit_reaches_eof_in(pty: Pty) {
 
 #[test]
 fn reading_past_the_child_exit_reaches_end_of_file_on_the_bundle() {
-    let Some(pty) = bundle_pty() else { return };
-    with_timeout(BUDGET, || reading_past_the_child_exit_reaches_eof_in(pty));
-}
-
-/// The same contract on the legacy shutdown path.
-///
-/// A bundled `conpty.dll` always exports `ReleasePseudoConsole`, so without
-/// the strip this path would be unreachable through a bundle no matter which
-/// Windows version the suite runs on — and it is the path where end-of-file
-/// has to be *produced* by the crate rather than observed.
-#[test]
-fn reading_past_the_child_exit_reaches_end_of_file_on_the_bundles_legacy_path() {
-    let Some(pty) = legacy_bundle_pty() else {
+    let Some(options) = bundle_options() else {
         return;
     };
-    with_timeout(BUDGET, || reading_past_the_child_exit_reaches_eof_in(pty));
+    with_timeout(BUDGET, || {
+        reading_past_the_child_exit_reaches_eof_in(options);
+    });
+}
+
+/// A backend clone keeps the DLL mapped after the original is dropped, and a
+/// real session built from that clone still reaches end-of-file.
+#[test]
+fn a_session_from_a_backend_clone_reaches_end_of_file() {
+    let Some(options) = cloned_bundle_options() else {
+        return;
+    };
+    with_timeout(BUDGET, || {
+        reading_past_the_child_exit_reaches_eof_in(options);
+    });
 }
 
 #[test]
 fn the_child_observes_a_resize_on_the_bundle() {
-    let initial = Size::new(24, 80);
-    let resized = Size::new(30, 100);
-    let Some(pty) = bundle_pty_with_size(initial) else {
+    let initial = size(24, 80);
+    let resized = size(30, 100);
+    let Some(options) = bundle_options_with_size(initial) else {
         return;
     };
     with_timeout(BUDGET, || {
-        let mut session = Session::start_in(pty, &mut Command::new("cmd.exe"));
+        let mut session = Session::start_with(&mut Command::new("cmd.exe"), options);
 
         // Wait for the prompt before typing: a shell that has not started
         // reading its console yet would drop the command.
@@ -323,8 +299,9 @@ fn the_child_observes_a_resize_on_the_bundle() {
 
         session.write_line("mode con");
         assert!(
-            wait_until(ANSWER, || reported_size(&session.output.text())
-                == expected_size(initial)),
+            wait_until(ANSWER, || {
+                reported_size(&session.output.text()) == Some(expected_size(initial))
+            }),
             "the child never reported the session's initial size {initial}: {:?}",
             strip_escapes(&session.output.text())
         );
@@ -337,8 +314,9 @@ fn the_child_observes_a_resize_on_the_bundle() {
 
         session.write_line("mode con");
         assert!(
-            wait_until(ANSWER, || reported_size(&session.output.text())
-                == expected_size(resized)),
+            wait_until(ANSWER, || {
+                reported_size(&session.output.text()) == Some(expected_size(resized))
+            }),
             "the child never observed the resize to {resized}: {:?}",
             strip_escapes(&session.output.text())
         );
@@ -354,11 +332,13 @@ fn kill_terminates_the_whole_tree_on_the_bundle() {
     const ROOT_EXE: &str = "cmd.exe";
     const GRANDCHILD_EXE: &str = "ping.exe";
 
-    let Some(pty) = bundle_pty() else { return };
+    let Some(options) = bundle_options() else {
+        return;
+    };
     with_timeout(BUDGET, || {
-        let mut session = Session::start_in(
-            pty,
+        let mut session = Session::start_with(
             Command::new(ROOT_EXE).args(["/c", "ping", "-t", "127.0.0.1"]),
+            options,
         );
         let root = session.child.id();
         let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, SETTLE);
@@ -379,7 +359,8 @@ fn kill_terminates_the_whole_tree_on_the_bundle() {
 
         // Still has to reach end-of-file afterwards; `finish` joins the
         // collector, which is what proves it.
-        session.finish();
+        let (_output, again) = session.finish();
+        assert_eq!(again, status, "the exit status must remain cached");
     });
 }
 
@@ -402,11 +383,12 @@ fn clearing_agrees_with_the_capability_query_on_the_bundle() {
     const BEFORE: &str = "conpty-oxide-before-clear";
     const AFTER: &str = "conpty-oxide-after-clear";
 
-    let Some(pty) = bundle_pty() else { return };
+    let Some(options) = bundle_options() else {
+        return;
+    };
     with_timeout(BUDGET, || {
-        let supported = pty.supports_clear();
-        let mut session = Session::start_in(pty, &mut Command::new("cmd.exe"));
-        assert_eq!(session.controller.supports_clear(), supported);
+        let mut session = Session::start_with(&mut Command::new("cmd.exe"), options);
+        let supported = session.controller.supports_clear();
 
         session.output.wait_for(">", ANSWER);
         session.write_line(&format!("echo {BEFORE}"));
@@ -417,15 +399,15 @@ fn clearing_agrees_with_the_capability_query_on_the_bundle() {
                 supported,
                 "clear succeeded on a backend that reports no clear support"
             ),
-            Err(Error::UnsupportedFeature { feature }) => {
+            Err(err) if err.kind() == ErrorKind::UnsupportedFeature => {
                 assert!(
                     !supported,
                     "clear was refused as unsupported on a backend that \
                      reports clear support"
                 );
-                assert_eq!(feature, "ClearPseudoConsole");
+                assert!(err.to_string().contains("ClearPseudoConsole"));
                 return;
-            }
+            },
             Err(other) => panic!("clearing the bundle's console failed: {other}"),
         }
 
@@ -438,23 +420,6 @@ fn clearing_agrees_with_the_capability_query_on_the_bundle() {
         let (_output, status) = session.finish();
         assert!(status.success(), "unexpected status: {status}");
     });
-}
-
-/// The unchecked constructor skips the version comparison and nothing else, so
-/// it must accept a bundle the checked one already accepted.
-#[test]
-fn the_unchecked_constructor_accepts_a_matching_bundle() {
-    let Some(dir) = bundle_dir() else {
-        eprintln!("skipped: {DLL_DIR_VAR} is not set");
-        return;
-    };
-    let Some(checked) = bundle() else { return };
-
-    let unchecked = ConPtyBackend::from_dir_unchecked(&dir)
-        .expect("the unchecked constructor must accept a bundle from_dir accepted");
-    assert_eq!(unchecked.kind(), checked.kind());
-    assert_eq!(unchecked.supports_release(), checked.supports_release());
-    assert_eq!(unchecked.supports_clear(), checked.supports_clear());
 }
 
 /// A `conpty.dll` with no `OpenConsole.exe` anywhere near it is rejected —
@@ -473,14 +438,12 @@ fn a_dll_without_its_console_host_is_rejected() {
     match bundle_dir() {
         Some(dir) => {
             fs::copy(dir.join("conpty.dll"), &dll).expect("copying the bundled dll must succeed");
-        }
+        },
         None => fs::write(&dll, b"").expect("creating the placeholder dll must succeed"),
     }
 
     let err = ConPtyBackend::from_dir(temp.path())
         .expect_err("a bundle without a console host must be rejected");
-    match err {
-        BackendError::OpenConsoleMissing { dll: reported } => assert_eq!(reported, dll),
-        other => panic!("expected OpenConsoleMissing, got {other:?}"),
-    }
+    assert_eq!(err.kind(), BackendErrorKind::OpenConsoleMissing);
+    assert!(err.to_string().contains(&dll.display().to_string()));
 }
