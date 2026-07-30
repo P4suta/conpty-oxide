@@ -3,9 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 [workspace]
-# The prepared v0.1.0 release PR enables this after moving the curated
-# Unreleased notes into the first versioned section.
-changelog_update = false
+changelog_update = true
 dependencies_update = false
 release_always = false
 git_release_draft = true
