@@ -322,9 +322,21 @@ mod tests {
     #[cfg(feature = "tracing")]
     use std::io;
 
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use std::sync::atomic::Ordering;
+
     use super::should_arm_legacy_watcher;
     #[cfg(feature = "tracing")]
     use super::{log_release_failure, log_spawn_cleanup_failure};
+
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use crate::backend::ConPtyBackend;
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use crate::core::pipes::{create_sync_pipes, SyncPipes};
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use crate::core::pseudocon::PseudoConsole;
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use crate::size::Size;
 
     #[test]
     fn legacy_watcher_requires_both_legacy_mode_and_eof_policy() {
@@ -332,6 +344,42 @@ mod tests {
         assert!(!should_arm_legacy_watcher(false, false));
         assert!(!should_arm_legacy_watcher(true, true));
         assert!(!should_arm_legacy_watcher(true, false));
+    }
+
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    #[test]
+    fn input_retirement_requests_close_only_after_a_child_attaches() {
+        let backend = ConPtyBackend::system().expect("ConPTY must be available");
+        let SyncPipes {
+            conout_read,
+            conout_write,
+            conin_read,
+            conin_write,
+        } = create_sync_pipes().expect("creating pipes must succeed");
+        let console = PseudoConsole::new(backend, Size::default(), conin_read, conout_write, false)
+            .expect("CreatePseudoConsole must succeed");
+        let shared = std::sync::Arc::clone(console.shared());
+        let session = super::Session::new(console, true);
+
+        // Retire the raw reader so either backend can claim close promptly;
+        // this test observes the Session-to-lifecycle request, not host I/O.
+        drop(conout_read);
+        shared.notify_reader_closed();
+
+        session.request_close_after_input();
+        assert!(
+            !shared.is_closed(),
+            "an idle session must stay usable when its writer is dropped"
+        );
+
+        session.attached.store(true, Ordering::SeqCst);
+        session.request_close_after_input();
+        assert!(
+            shared.is_closed(),
+            "input retirement after attachment must claim pseudoconsole close"
+        );
+
+        drop(conin_write);
     }
 
     #[cfg(feature = "tracing")]

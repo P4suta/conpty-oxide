@@ -466,6 +466,19 @@ impl ConPtyBackend {
         }
     }
 
+    /// Replaces only the close export so lifecycle tests can observe a
+    /// detached FFI call without passing a fabricated handle to Windows.
+    #[cfg(test)]
+    pub(super) fn with_test_close(&self, close: unsafe extern "system" fn(HPCON)) -> Self {
+        Self {
+            inner: Arc::new(BackendInner {
+                kind: self.inner.kind.clone(),
+                api: self.inner.api.with_close(close),
+                module_pin: self.inner.module_pin.clone(),
+            }),
+        }
+    }
+
     /// Returns the backend to use when the caller did not name one.
     ///
     /// Only successful automatic detection is cached; failures remain

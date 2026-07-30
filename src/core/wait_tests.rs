@@ -340,12 +340,36 @@ fn callback_unregister_cleanup_classifier_covers_every_result() {
 
 #[cfg(feature = "tracing")]
 #[test]
-fn callback_and_unregister_failures_are_logged() {
+fn callback_and_cleanup_failures_are_logged() {
     let events = crate::tracing_test_support::count_events(|| {
         log_callback_panic_safely("injected callback");
         log_unregister_failure(&io::Error::other("injected unregister failure"));
+        log_legacy_worker_failure(&io::Error::other("injected worker failure"));
     });
-    assert_eq!(events, 2);
+    assert_eq!(events, 3);
+}
+
+#[test]
+fn legacy_close_grace_only_waits_for_an_active_reader() {
+    assert!(should_wait_for_legacy_reader(false));
+    assert!(!should_wait_for_legacy_reader(true));
+}
+
+#[test]
+fn legacy_wait_object_returns_the_published_registration() {
+    let mut child = spawn_cmd(&["/C", "exit 0"]);
+    let expected = child.as_handle().as_raw_handle();
+    let context = LegacyWaitContext {
+        process: ProcessWaiter::new(duplicated_handle(&child)),
+        shared: Weak::new(),
+        grace: Duration::ZERO,
+        spawn_close_worker: true,
+        wait_object: Mutex::new(Some(expected)),
+        wait_object_ready: Condvar::new(),
+    };
+
+    assert_eq!(legacy_wait_object(&context), expected);
+    child.wait().expect("reaping via std must succeed");
 }
 
 #[test]

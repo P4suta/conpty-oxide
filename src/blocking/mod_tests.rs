@@ -985,6 +985,32 @@ fn low_level_pty_and_borrowed_halves_delegate_io() {
 }
 
 #[test]
+fn managed_session_try_wait_reports_a_completed_child() {
+    complete_within("managed_session_try_wait_reports_a_completed_child", || {
+        let mut session = Command::new("cmd.exe")
+            .args(["/c", "exit", "23"])
+            .spawn()
+            .expect("managed spawning must succeed");
+        let expected = session
+            .child
+            .wait()
+            .expect("waiting for the managed child must succeed");
+
+        assert_eq!(
+            session
+                .try_wait()
+                .expect("polling the completed managed session must succeed"),
+            Some(expected)
+        );
+
+        let output = session
+            .wait_with_output()
+            .expect("draining the completed managed session must succeed");
+        assert_eq!(output.status(), expected);
+    });
+}
+
+#[test]
 fn managed_session_delegates_io_and_debugs_named_parts() {
     complete_within(
         "managed_session_delegates_io_and_debugs_named_parts",

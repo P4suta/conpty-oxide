@@ -43,6 +43,21 @@ shutdown, and both named-pipe retry branches. After adding direct behavioural
 tests, a copy-mode rerun caught all five affected mutants; the remaining miss
 was the equivalent zero-valued flag expression documented below.
 
+The final four-shard release audit enumerated 625 candidates after the
+lifecycle work settled. It reported 418 caught, 194 compile-unviable, 13
+missed, and no timeouts. Three misses were the exact equivalent tracing and
+zero-valued pipe-mode expressions documented below. The other ten exposed
+gaps around the injected worker-spawn failure, the detached backend close
+call, attached-session input retirement, legacy-reader grace and wait-handle
+publication, nested worker-failure diagnostics, blocking writer retirement,
+and completed-child polling in both front ends.
+
+Direct tests now observe each of those behaviours without timing races. A
+current-tree rerun of the affected and adjacent candidates exercised 20
+mutants: 18 were caught, two replacement values did not compile, and none
+survived or timed out. The exact equivalent expressions are excluded narrowly;
+the current candidate list contains 624 mutations.
+
 ## Equivalent mutations
 
 `.cargo/mutants.toml` excludes only these exact cases:
@@ -60,11 +75,19 @@ was the equivalent zero-valued flag expression documented below.
 - Both named-pipe server access flags and the file-mode flags occupy disjoint
   bits. The byte/read/wait mode constants are zero, so OR and XOR also produce
   the same local-only mode value.
-- In `pipe_mode`, the first OR combines `PIPE_TYPE_BYTE` and
-  `PIPE_READMODE_BYTE`, both of which are zero. Replacing only that operator
-  with AND therefore still produces zero. The exclusion is restricted to
-  column 20 of that function; the other AND substitutions change the policy
-  and remain tested.
+- In `pipe_mode`, `PIPE_TYPE_BYTE`, `PIPE_READMODE_BYTE`, and `PIPE_WAIT` are
+  all zero. Replacing the OR at column 20 or 41 with AND therefore still leaves
+  the accumulated mode at zero. The exclusions are restricted to those two
+  operators; the later AND substitution drops `PIPE_REJECT_REMOTE_CLIENTS`
+  and remains tested.
+- `EventCounter::enabled` is unreachable through `count_events`: its
+  `register_callsite` returns `Interest::always()`, which tells `tracing` to
+  enable that callsite without consulting `enabled`. Returning `false` there
+  therefore cannot change which test diagnostics are counted.
+- `EventCounter::max_level_hint` returning `Some(LevelFilter::TRACE)` and
+  returning `None` both permit every `tracing` level. The hint can only avoid
+  filter work; it cannot change the events observed by this all-events test
+  subscriber.
 
 The tests assert the resulting numeric policies. All other AND substitutions
 and dropped flags remain included and must fail.

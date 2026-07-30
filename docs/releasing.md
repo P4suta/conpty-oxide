@@ -19,48 +19,139 @@ first patch release. Run it against the tagged baseline separately for no
 frontend, `blocking`, `tokio`, and both frontends. Keep the snapshot gate as a
 second, human-reviewable check.
 
-## Publication sequence
+## Repository setup
 
-Publication is blocked until `https://github.com/P4suta/conpty-oxide` exists as
-a public repository and the release commit has been pushed. Before the first
-release, configure the repository itself:
+The repository uses Rulesets rather than classic branch protection. The
+default branch requires pull requests, linear history, current successful CI,
+CodeQL for Rust and Actions, Dependency Review, and the configured code-scanning
+threshold. A separate Ruleset prevents updates, force pushes, or deletion of
+`v*` tags after creation.
 
-1. Enable GitHub private vulnerability reporting under **Settings > Security
-   > Code security and analysis**. Confirm that the links in `SECURITY.md`,
-   `CODE_OF_CONDUCT.md`, and the issue-form chooser open a private report.
-2. Protect `main`: require pull requests, require the `CI required` status,
-   require the branch to be current before merging, dismiss stale approvals,
-   and block force pushes and deletion. Apply the rules to administrators too.
-3. Confirm that Actions has read-only repository permissions by default and
-   that no workflow receives broader permissions than it needs.
-4. Add README badges only after their public endpoints exist. At minimum show
-   CI, crates.io, docs.rs, MSRV, and the dual license; click every badge and
-   verify that it targets this repository or crate.
+Keep these repository settings enabled:
 
-For each release:
+- read-only default `GITHUB_TOKEN` permissions and SHA-pinned selected Actions;
+- Dependabot alerts and security updates, secret scanning, push protection,
+  private vulnerability reporting, and CodeQL advanced setup;
+- immutable releases, squash-only merges, automatic branch deletion, and
+  automatic branch updates.
 
-1. Reconfirm on crates.io that the exact `conpty-oxide` crate name is still
-   available (first release) or owned by the expected publishers (later
-   releases).
-2. Move the pending entries in `CHANGELOG.md` under the version and release
-   date, update its comparison links, and verify the Cargo version.
-3. Run `just release-check`. It requires a clean worktree, runs the complete
-   local CI suite, checks the normalized package and both external consumers,
-   and finishes with `cargo publish --dry-run --locked`.
-4. Push the release commit and require the full GitHub CI workflow, including
-   the published-package job, to pass on that exact commit.
-5. Inspect `cargo package --list --locked` once more for secrets, generated
-   files, or missing documentation.
-6. Publish with `cargo publish --locked`, then confirm that the version is
-   visible on crates.io before creating an immutable tag.
-7. Create and push the `v0.1.0` tag for the exact release commit that produced
-   the published package.
-8. Confirm that docs.rs built the published version with all features and both
-   documented Windows targets. Open several API pages rather than relying only
-   on the green build indicator.
-9. Build small blocking and Tokio consumers against the registry release and
-   confirm spawn, virtual-terminal output, and exit status.
-10. Create the GitHub release from the tag using the matching changelog entry.
+The `release` Environment permits only `main` and `v*`. It contains the
+non-secret variable `RELEASE_PLZ_APP_CLIENT_ID`. Add the permanent secret
+`RELEASE_PLZ_APP_PRIVATE_KEY` for the installed `p4suta-release-plz` App. The
+App needs repository **Contents: read/write** and **Pull requests:
+read/write**; it does not need Administration access.
 
-Do not create the repository, push, tag, or publish as part of an ordinary
-release-preparation change.
+## Automated release flow
+
+`release-plz` runs only after the exact `main` commit passes the `CI` workflow.
+It uses release pull requests and `release_always = false`, so an ordinary
+merge cannot publish a crate. Its App token is limited to this repository and
+the workflow verifies the returned App slug before use.
+
+Merging a release-plz pull request performs the following sequence:
+
+1. `release-plz release` publishes the version, creates `vX.Y.Z`, and creates a
+   draft GitHub release.
+2. `release-plz.yml` dispatches `release-finalize.yml` at that exact tag.
+3. The finalizer downloads the registry-hosted `.crate`, checks its SHA-256
+   against the crates.io sparse index, and checks the archive's Cargo metadata
+   and VCS commit.
+4. It generates a CycloneDX 1.5 SBOM from the extracted registry artifact,
+   binds the distribution URL and digest into the root component, and validates
+   the document with the official CycloneDX CLI.
+5. GitHub creates SLSA provenance and CycloneDX SBOM attestations. The finalizer
+   uploads the `.crate`, SBOM, checksum file, and offline attestation bundles to
+   the draft.
+6. A clean download is checked against every digest and both online and offline
+   attestations. Only then is the draft published as an immutable release.
+7. The finalizer consumes GitHub's release attestation with `gh release verify`
+   and verifies every release asset.
+
+The SLSA predicate records the hosted finalizer that authenticated and promoted
+the crates.io artifact. It is not a claim of an independent reproducible build
+or of a particular SLSA build level.
+
+If finalization fails before publication, the release remains a mutable draft.
+Fix the cause and re-run `release-finalize.yml` at the existing tag; never
+replace the tag or publish the incomplete draft manually. If publication
+succeeded but its eventual immutable-release verification failed, re-run the
+same tag: the workflow takes its published, verify-only path.
+
+## First publication
+
+crates.io Trusted Publishing cannot create a new crate. Bootstrap `v0.1.0`
+with a short-lived crates.io token. The first release pull request is prepared
+once on the `release-plz-v0.1.0` branch: it moves the curated notes from
+`Unreleased` to `0.1.0` and enables automatic changelog updates. This preserves
+the same reviewed-PR release gate without asking release-plz to reconstruct the
+project's curated initial history.
+
+1. Add `CARGO_REGISTRY_TOKEN` to the `release` Environment with only
+   `publish-new` and `publish-update` scopes. Keep the token out of repository
+   and command-line logs. Add `RELEASE_PLZ_APP_PRIVATE_KEY` there as well.
+2. Reconfirm immediately before merging that `conpty-oxide` is still available
+   on crates.io; the dry-run does not reserve the name.
+3. Run `just release-check` on the release commit. Review
+   `cargo package --list --locked`, then push it and require every pull-request
+   check to pass.
+4. Review and merge the prepared `release-plz-v0.1.0` pull request. Confirm that
+   it changes only the release state described above; the branch prefix is the
+   release-plz contract that authorizes publication with `release_always =
+   false`.
+5. Wait for crates.io publication, finalization, immutable-release verification,
+   and the docs.rs builds for all documented features and Windows targets.
+6. Once the crate and docs.rs links resolve, add only the compact crates.io,
+   docs.rs, and CI badges to the README in a normal follow-up pull request.
+7. On crates.io, configure the trusted publisher as owner `P4suta`, repository
+   `conpty-oxide`, workflow `release-plz.yml`, Environment `release`.
+8. Delete the Environment token and revoke it on crates.io immediately after
+   saving the trusted publisher. Confirm the next release logs show the OIDC
+   exchange; later releases use only short-lived credentials.
+
+For a credential-free repository handoff, the prepared release PR may instead
+be squash-merged while the automation is dormant. Make no later commit to
+`main`: release-plz authorizes the first publish by associating the current
+commit with the `release-plz-v0.1.0` PR. After adding both Environment secrets,
+manually dispatch `Release-plz` from `main`. The normal CI-complete release and
+finalization sequence then resumes at that exact commit.
+
+## Registry and GitHub reconciliation
+
+`cargo publish` is irreversible, while creation of the Git tag or draft GitHub
+release happens afterward. If release-plz reports failure after crates.io has
+accepted the crate, do not publish again and do not move an existing tag.
+
+1. Download the registry `.crate`, require its SHA-256 to equal the exact
+   version entry in the crates.io sparse index, and require its
+   `.cargo_vcs_info.json` commit to equal the reviewed release commit.
+2. If and only if both checks pass, create the missing `vX.Y.Z` tag at that
+   exact commit and/or create the missing draft GitHub release for that tag.
+   Stop instead of reconciling if any existing tag or release points elsewhere.
+3. Dispatch `release-finalize.yml` at the tag with the matching `tag` and
+   `version` inputs. The finalizer repeats the registry checksum and VCS checks
+   before it attaches or publishes anything.
+
+Keep the reconciled release as a draft until the finalizer succeeds. The
+immutable release, SLSA provenance, CycloneDX attestation, and consumer checks
+then follow the normal path.
+
+## Routine releases
+
+Before merging a release-plz pull request:
+
+1. Review the proposed SemVer change and curated `CHANGELOG.md` entry.
+2. Run `just release-check` from a clean worktree.
+3. Confirm the public API snapshots, package contents, external blocking/Tokio
+   consumers, coverage threshold, and dry-run publish all pass.
+4. Merge only after the required Ruleset checks pass on the current head.
+
+After publication, verify the distributed bytes independently:
+
+```powershell
+pwsh -NoProfile -File scripts/verify-release.ps1 -Tag v0.1.0
+```
+
+The scheduled release-integrity workflow runs the same verification for the
+latest immutable release, then feeds the verified SBOM to Grype and uploads its
+SARIF results to Code Scanning. This complements Dependabot and `cargo deny`,
+which inspect the current source tree rather than the already published crate.

@@ -32,7 +32,9 @@ lint-fast: source-policy
     taplo fmt --check
     rumdl check .
     yamllint --strict .
-    actionlint
+    $workflows = @(Get-ChildItem -LiteralPath '.github/workflows' -Filter '*.yml' | Where-Object Name -ne 'release-finalize.yml' | ForEach-Object FullName); actionlint @workflows; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    actionlint -shellcheck= .github/workflows/release-finalize.yml
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-workflow-shells.ps1 -Path .github/workflows/release-finalize.yml -DefaultShell bash -ExpectedCount 11
     cargo shear --deny-warnings --check-test-targets
 
 # Strict Rust linting over every feature combination.
@@ -121,11 +123,15 @@ mutants: fetch-conpty
 
 # Run one CI mutation shard in its disposable checkout.
 mutants-ci shard: fetch-conpty
-    $env:CONPTY_OXIDE_TEST_DLL_DIR = (Join-Path $PWD 'vendor/conpty'); cargo mutants --in-place --shard {{shard}}/4 --timeout 90 --build-timeout 180 --no-shuffle -vV
+    $env:CONPTY_OXIDE_TEST_DLL_DIR = (Join-Path $PWD 'vendor/conpty'); cargo mutants --in-place --shard {{ shard }}/4 --timeout 90 --build-timeout 180 --no-shuffle -vV
 
 # Build and smoke-test the exact normalized source Cargo would publish.
 package-check:
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-package.ps1
+
+# Verify the latest immutable release, or the supplied v-prefixed tag.
+verify-release tag='':
+    pwsh.exe -NoLogo -NoProfile -File scripts/verify-release.ps1 -Tag '{{ tag }}'
 
 # Refuse to release from a commit that does not exactly match the worktree.
 clean-worktree:

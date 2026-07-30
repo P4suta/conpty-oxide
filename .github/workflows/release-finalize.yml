@@ -1,0 +1,513 @@
+---
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name: Finalize release
+
+"on":
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact release tag created by release-plz
+        required: true
+        type: string
+      version:
+        description: Exact crate version released by release-plz
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-finalize-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    name: Attest and publish immutable release
+    if: github.repository == 'P4suta/conpty-oxide'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: write
+      id-token: write
+    env:
+      PACKAGE_NAME: conpty-oxide
+      CYCLONEDX_CLI_VERSION: 0.33.1
+      CYCLONEDX_CLI_SHA256: bfc8b2538da86fe239bc53658bbb63c1c8c510a293c1e6891aa5bea5d3c58746
+      CYCLONEDX_PREDICATE: https://cyclonedx.org/bom
+      SIGNER_WORKFLOW: ${{ github.repository }}/.github/workflows/release-finalize.yml
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+
+      - name: Validate dispatch and inspect release
+        id: inspect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid semantic version: $RELEASE_VERSION" >&2
+            exit 1
+          fi
+          [[ "$RELEASE_TAG" == "v$RELEASE_VERSION" ]]
+          [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$(git rev-list -n 1 "$RELEASE_TAG")" == "$GITHUB_SHA" ]]
+
+          manifest_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r \
+            --arg name "$PACKAGE_NAME" '.packages[] | select(.name == $name) | .version')"
+          [[ "$manifest_version" == "$RELEASE_VERSION" ]]
+
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
+          jq -e --arg tag "$RELEASE_TAG" '
+            .tag_name == $tag and
+            (.draft | type == "boolean") and
+            (.prerelease | type == "boolean")
+          ' <<< "$release_json" >/dev/null
+
+          if [[ "$(jq -r '.draft' <<< "$release_json")" == "true" ]]; then
+            state=draft
+            unexpected="$(jq -r '
+              [.assets[].name] - [
+                "conpty-oxide-'"$RELEASE_VERSION"'.crate",
+                "conpty-oxide-'"$RELEASE_VERSION"'.cdx.json",
+                "SHA256SUMS",
+                "conpty-oxide-'"$RELEASE_VERSION"'.provenance.sigstore.json",
+                "conpty-oxide-'"$RELEASE_VERSION"'.sbom.sigstore.json"
+              ] | .[]
+            ' <<< "$release_json")"
+            [[ -z "$unexpected" ]]
+          else
+            state=published
+          fi
+
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$(jq -r '.prerelease' <<< "$release_json")" >> "$GITHUB_OUTPUT"
+
+      - name: Install the pinned CycloneDX validator
+        run: |
+          set -euo pipefail
+          cli="$RUNNER_TEMP/cyclonedx-cli"
+          release_url="https://github.com/CycloneDX/cyclonedx-cli/releases/download/v${CYCLONEDX_CLI_VERSION}"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            "$release_url/cyclonedx-linux-x64" \
+            --output "$cli"
+          echo "$CYCLONEDX_CLI_SHA256 *$cli" | sha256sum --check --strict
+          chmod 0755 "$cli"
+          "$cli" --version
+
+      - name: Install cargo-cyclonedx
+        if: steps.inspect.outputs.state == 'draft'
+        uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
+        with:
+          tool: cargo-cyclonedx@0.5.9
+
+      - name: Fetch and authenticate the published crate
+        if: steps.inspect.outputs.state == 'draft'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist crate-source
+          crate="dist/${PACKAGE_NAME}-${RELEASE_VERSION}.crate"
+          download_url="https://crates.io/api/v1/crates/${PACKAGE_NAME}/${RELEASE_VERSION}/download"
+          index_url="https://index.crates.io/co/np/${PACKAGE_NAME}"
+
+          downloaded=false
+          for attempt in $(seq 1 30); do
+            if curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+              "$download_url" --output "$crate"; then
+              downloaded=true
+              break
+            fi
+            echo "Waiting for crates.io download (attempt $attempt/30)"
+            sleep 10
+          done
+          [[ "$downloaded" == "true" ]]
+
+          indexed=false
+          for attempt in $(seq 1 30); do
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              -H 'Cache-Control: no-cache' "$index_url" --output "$RUNNER_TEMP/crates-index.jsonl"
+            entry="$(jq -sc --arg version "$RELEASE_VERSION" \
+              '[.[] | select(.vers == $version)] | if length == 1 then .[0] else empty end' \
+              "$RUNNER_TEMP/crates-index.jsonl")"
+            if [[ -n "$entry" ]]; then
+              indexed=true
+              break
+            fi
+            echo "Waiting for crates.io index (attempt $attempt/30)"
+            sleep 10
+          done
+          [[ "$indexed" == "true" ]]
+          jq -e --arg name "$PACKAGE_NAME" --arg version "$RELEASE_VERSION" '
+            .name == $name and .vers == $version and .yanked == false and
+            (.cksum | test("^[0-9a-f]{64}$"))
+          ' <<< "$entry" >/dev/null
+
+          expected_digest="$(jq -r '.cksum' <<< "$entry")"
+          actual_digest="$(sha256sum "$crate" | cut -d ' ' -f 1)"
+          [[ "$actual_digest" == "$expected_digest" ]]
+          echo "$actual_digest" > "$RUNNER_TEMP/crate-sha256"
+
+          archive_root="${PACKAGE_NAME}-${RELEASE_VERSION}"
+          while IFS= read -r archive_path; do
+            [[ "$archive_path" == "$archive_root" || "$archive_path" == "$archive_root/"* ]]
+            [[ "$archive_path" != /* ]]
+            [[ "/$archive_path/" != *"/../"* ]]
+          done < <(tar -tzf "$crate")
+          tar --extract --gzip --file "$crate" --directory crate-source \
+            --no-same-owner --no-same-permissions
+
+          crate_root="crate-source/$archive_root"
+          vcs_info="$crate_root/.cargo_vcs_info.json"
+          jq -e --arg sha "$GITHUB_SHA" '
+            .git.sha1 == $sha and ((.git.dirty // false) != true)
+          ' "$vcs_info" >/dev/null
+          package_identity="$(cargo metadata --manifest-path "$crate_root/Cargo.toml" \
+            --locked --no-deps --format-version 1 | jq -r '.packages[0] | "\(.name)@\(.version)"')"
+          [[ "$package_identity" == "${PACKAGE_NAME}@${RELEASE_VERSION}" ]]
+
+      - name: Generate CycloneDX 1.5 from the published crate
+        if: steps.inspect.outputs.state == 'draft'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          crate_root="$GITHUB_WORKSPACE/crate-source/${PACKAGE_NAME}-${RELEASE_VERSION}"
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          lockfile="$crate_root/Cargo.lock"
+          [[ -f "$lockfile" ]]
+          lock_digest_before="$(sha256sum "$lockfile" | cut -d ' ' -f 1)"
+          (
+            cd "$crate_root"
+            SOURCE_DATE_EPOCH="$source_date_epoch" cargo cyclonedx \
+              --manifest-path Cargo.toml \
+              --format json \
+              --spec-version 1.5 \
+              --target all \
+              --all-features \
+              --all
+          )
+          lock_digest_after="$(sha256sum "$lockfile" | cut -d ' ' -f 1)"
+          [[ "$lock_digest_after" == "$lock_digest_before" ]]
+
+          mapfile -t generated < <(find "$crate_root" -maxdepth 1 -type f -name '*.cdx.json')
+          [[ "${#generated[@]}" -eq 1 ]]
+          mv "${generated[0]}" "dist/${PACKAGE_NAME}-${RELEASE_VERSION}.cdx.json"
+
+      - name: Bind and validate the SBOM distribution
+        if: steps.inspect.outputs.state == 'draft'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          sbom="dist/${PACKAGE_NAME}-${RELEASE_VERSION}.cdx.json"
+          digest="$(<"$RUNNER_TEMP/crate-sha256")"
+          distribution_url="https://crates.io/api/v1/crates/${PACKAGE_NAME}/${RELEASE_VERSION}/download"
+
+          jq --arg digest "$digest" --arg url "$distribution_url" '
+            .metadata.component.hashes = (
+              ((.metadata.component.hashes // []) | map(select(.alg != "SHA-256"))) +
+              [{"alg": "SHA-256", "content": $digest}]
+            ) |
+            .metadata.component.externalReferences = (
+              ((.metadata.component.externalReferences // []) |
+                map(select(.type != "distribution"))) +
+              [{
+                "type": "distribution",
+                "url": $url,
+                "hashes": [{"alg": "SHA-256", "content": $digest}]
+              }]
+            )
+          ' "$sbom" > "$RUNNER_TEMP/enriched.cdx.json"
+          mv "$RUNNER_TEMP/enriched.cdx.json" "$sbom"
+
+          "$RUNNER_TEMP/cyclonedx-cli" validate \
+            --input-file "$sbom" \
+            --input-format json \
+            --input-version v1_5 \
+            --fail-on-errors
+          jq -e --arg name "$PACKAGE_NAME" --arg version "$RELEASE_VERSION" \
+            --arg digest "$digest" --arg url "$distribution_url" '
+            .bomFormat == "CycloneDX" and .specVersion == "1.5" and
+            .metadata.component.name == $name and
+            .metadata.component.version == $version and
+            ([.metadata.component.externalReferences[] |
+              select(.type == "distribution" and .url == $url and
+                any(.hashes[]; .alg == "SHA-256" and .content == $digest))] | length == 1)
+          ' "$sbom" >/dev/null
+
+      - name: Prepare provenance subjects
+        if: steps.inspect.outputs.state == 'draft'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          (
+            cd dist
+            sha256sum \
+              "${PACKAGE_NAME}-${RELEASE_VERSION}.crate" \
+              "${PACKAGE_NAME}-${RELEASE_VERSION}.cdx.json" \
+              > "$RUNNER_TEMP/provenance-subjects.sha256"
+          )
+
+      - name: Create SLSA provenance attestation
+        id: provenance
+        if: steps.inspect.outputs.state == 'draft'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d  # v4.2.1
+        with:
+          subject-checksums: ${{ runner.temp }}/provenance-subjects.sha256
+
+      - name: Create CycloneDX SBOM attestation
+        id: sbom-attestation
+        if: steps.inspect.outputs.state == 'draft'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d  # v4.2.1
+        with:
+          subject-path: dist/${{ env.PACKAGE_NAME }}-${{ inputs.version }}.crate
+          sbom-path: dist/${{ env.PACKAGE_NAME }}-${{ inputs.version }}.cdx.json
+
+      - name: Assemble the five release assets
+        if: steps.inspect.outputs.state == 'draft'
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          SBOM_BUNDLE: ${{ steps.sbom-attestation.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "$PROVENANCE_BUNDLE" \
+            "dist/${PACKAGE_NAME}-${RELEASE_VERSION}.provenance.sigstore.json"
+          cp "$SBOM_BUNDLE" \
+            "dist/${PACKAGE_NAME}-${RELEASE_VERSION}.sbom.sigstore.json"
+          (
+            cd dist
+            sha256sum \
+              "${PACKAGE_NAME}-${RELEASE_VERSION}.crate" \
+              "${PACKAGE_NAME}-${RELEASE_VERSION}.cdx.json" \
+              "${PACKAGE_NAME}-${RELEASE_VERSION}.provenance.sigstore.json" \
+              "${PACKAGE_NAME}-${RELEASE_VERSION}.sbom.sigstore.json" \
+              > SHA256SUMS
+          )
+
+      - name: Upload the complete draft asset set
+        if: steps.inspect.outputs.state == 'draft'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "dist/${PACKAGE_NAME}-${RELEASE_VERSION}.crate" \
+            "dist/${PACKAGE_NAME}-${RELEASE_VERSION}.cdx.json" \
+            "dist/SHA256SUMS" \
+            "dist/${PACKAGE_NAME}-${RELEASE_VERSION}.provenance.sigstore.json" \
+            "dist/${PACKAGE_NAME}-${RELEASE_VERSION}.sbom.sigstore.json"
+
+          assets="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            --jq '[.assets[].name] | sort')"
+          expected="$(jq -cn --arg version "$RELEASE_VERSION" '[
+            "SHA256SUMS",
+            "conpty-oxide-\($version).cdx.json",
+            "conpty-oxide-\($version).crate",
+            "conpty-oxide-\($version).provenance.sigstore.json",
+            "conpty-oxide-\($version).sbom.sigstore.json"
+          ] | sort')"
+          [[ "$assets" == "$expected" ]]
+
+      - name: Verify assets and attestations before publication
+        if: steps.inspect.outputs.state == 'draft'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          clean="$RUNNER_TEMP/pre-publish-consumer"
+          mkdir -p "$clean"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$clean"
+          crate="$clean/${PACKAGE_NAME}-${RELEASE_VERSION}.crate"
+          sbom="$clean/${PACKAGE_NAME}-${RELEASE_VERSION}.cdx.json"
+          provenance="$clean/${PACKAGE_NAME}-${RELEASE_VERSION}.provenance.sigstore.json"
+          sbom_bundle="$clean/${PACKAGE_NAME}-${RELEASE_VERSION}.sbom.sigstore.json"
+
+          expected="$(printf '%s\n' \
+            "${PACKAGE_NAME}-${RELEASE_VERSION}.crate" \
+            "${PACKAGE_NAME}-${RELEASE_VERSION}.cdx.json" \
+            "${PACKAGE_NAME}-${RELEASE_VERSION}.provenance.sigstore.json" \
+            "${PACKAGE_NAME}-${RELEASE_VERSION}.sbom.sigstore.json" \
+            SHA256SUMS | sort)"
+          actual="$(find "$clean" -maxdepth 1 -type f -printf '%f\n' | sort)"
+          [[ "$actual" == "$expected" ]]
+          (cd "$clean" && sha256sum --check --strict SHA256SUMS)
+          "$RUNNER_TEMP/cyclonedx-cli" validate --input-file "$sbom" \
+            --input-format json --input-version v1_5 --fail-on-errors
+
+          gh attestation trusted-root > "$RUNNER_TEMP/trusted-root.jsonl"
+          common=(--repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW"
+            --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$GITHUB_SHA"
+            --deny-self-hosted-runners --format json)
+          gh attestation verify "$crate" "${common[@]}" > "$RUNNER_TEMP/provenance-online.json"
+          gh attestation verify "$sbom" "${common[@]}" > "$RUNNER_TEMP/provenance-sbom-online.json"
+          gh attestation verify "$crate" "${common[@]}" \
+            --predicate-type "$CYCLONEDX_PREDICATE" > "$RUNNER_TEMP/sbom-online.json"
+          gh attestation verify "$crate" "${common[@]}" --bundle "$provenance" \
+            --custom-trusted-root "$RUNNER_TEMP/trusted-root.jsonl" \
+            > "$RUNNER_TEMP/provenance-offline.json"
+          gh attestation verify "$sbom" "${common[@]}" --bundle "$provenance" \
+            --custom-trusted-root "$RUNNER_TEMP/trusted-root.jsonl" \
+            > "$RUNNER_TEMP/provenance-sbom-offline.json"
+          gh attestation verify "$crate" "${common[@]}" --bundle "$sbom_bundle" \
+            --custom-trusted-root "$RUNNER_TEMP/trusted-root.jsonl" \
+            --predicate-type "$CYCLONEDX_PREDICATE" > "$RUNNER_TEMP/sbom-offline.json"
+
+          for result in \
+            "$RUNNER_TEMP"/provenance-{online,offline}.json \
+            "$RUNNER_TEMP"/provenance-sbom-{online,offline}.json; do
+            jq -e 'length >= 1' "$result" >/dev/null
+          done
+          for result in "$RUNNER_TEMP"/sbom-{online,offline}.json; do
+            jq -e --slurpfile expected "$sbom" '
+              length >= 1 and
+              any(.[]; .verificationResult.statement.predicate == $expected[0])
+            ' "$result" >/dev/null
+          done
+
+      - name: Publish the immutable release
+        if: steps.inspect.outputs.state == 'draft'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_PRERELEASE: ${{ steps.inspect.outputs.prerelease }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          else
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi
+
+      - name: Consume and verify the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          clean="$RUNNER_TEMP/published-consumer"
+          mkdir -p "$clean"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$clean"
+
+          expected="$(printf '%s\n' \
+            "${PACKAGE_NAME}-${RELEASE_VERSION}.crate" \
+            "${PACKAGE_NAME}-${RELEASE_VERSION}.cdx.json" \
+            "${PACKAGE_NAME}-${RELEASE_VERSION}.provenance.sigstore.json" \
+            "${PACKAGE_NAME}-${RELEASE_VERSION}.sbom.sigstore.json" \
+            SHA256SUMS | sort)"
+          actual="$(find "$clean" -maxdepth 1 -type f -printf '%f\n' | sort)"
+          [[ "$actual" == "$expected" ]]
+          (cd "$clean" && sha256sum --check --strict SHA256SUMS)
+
+          crate="$clean/${PACKAGE_NAME}-${RELEASE_VERSION}.crate"
+          sbom="$clean/${PACKAGE_NAME}-${RELEASE_VERSION}.cdx.json"
+          provenance="$clean/${PACKAGE_NAME}-${RELEASE_VERSION}.provenance.sigstore.json"
+          sbom_bundle="$clean/${PACKAGE_NAME}-${RELEASE_VERSION}.sbom.sigstore.json"
+          digest="$(sha256sum "$crate" | cut -d ' ' -f 1)"
+          distribution_url="https://crates.io/api/v1/crates/${PACKAGE_NAME}/${RELEASE_VERSION}/download"
+
+          index_entry="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+            -H 'Cache-Control: no-cache' "https://index.crates.io/co/np/${PACKAGE_NAME}" |
+            jq -sc --arg version "$RELEASE_VERSION" \
+              '[.[] | select(.vers == $version)] | if length == 1 then .[0] else error("version missing") end')"
+          [[ "$(jq -r '.cksum' <<< "$index_entry")" == "$digest" ]]
+          tar -xOzf "$crate" \
+            "${PACKAGE_NAME}-${RELEASE_VERSION}/.cargo_vcs_info.json" \
+            > "$RUNNER_TEMP/published-vcs-info.json"
+          jq -e --arg sha "$GITHUB_SHA" '
+            .git.sha1 == $sha and ((.git.dirty // false) != true)
+          ' "$RUNNER_TEMP/published-vcs-info.json" >/dev/null
+
+          "$RUNNER_TEMP/cyclonedx-cli" validate --input-file "$sbom" \
+            --input-format json --input-version v1_5 --fail-on-errors
+          jq -e --arg name "$PACKAGE_NAME" --arg version "$RELEASE_VERSION" \
+            --arg digest "$digest" --arg url "$distribution_url" '
+            .metadata.component.name == $name and
+            .metadata.component.version == $version and
+            ([.metadata.component.externalReferences[] |
+              select(.type == "distribution" and .url == $url and
+                any(.hashes[]; .alg == "SHA-256" and .content == $digest))] | length == 1)
+          ' "$sbom" >/dev/null
+
+          gh attestation trusted-root > "$RUNNER_TEMP/published-trusted-root.jsonl"
+          common=(--repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW"
+            --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$GITHUB_SHA"
+            --deny-self-hosted-runners --format json)
+          gh attestation verify "$crate" "${common[@]}" > "$RUNNER_TEMP/published-provenance-online.json"
+          gh attestation verify "$sbom" "${common[@]}" > "$RUNNER_TEMP/published-provenance-sbom-online.json"
+          gh attestation verify "$crate" "${common[@]}" \
+            --predicate-type "$CYCLONEDX_PREDICATE" > "$RUNNER_TEMP/published-sbom-online.json"
+          gh attestation verify "$crate" "${common[@]}" --bundle "$provenance" \
+            --custom-trusted-root "$RUNNER_TEMP/published-trusted-root.jsonl" \
+            > "$RUNNER_TEMP/published-provenance-offline.json"
+          gh attestation verify "$sbom" "${common[@]}" --bundle "$provenance" \
+            --custom-trusted-root "$RUNNER_TEMP/published-trusted-root.jsonl" \
+            > "$RUNNER_TEMP/published-provenance-sbom-offline.json"
+          gh attestation verify "$crate" "${common[@]}" --bundle "$sbom_bundle" \
+            --custom-trusted-root "$RUNNER_TEMP/published-trusted-root.jsonl" \
+            --predicate-type "$CYCLONEDX_PREDICATE" > "$RUNNER_TEMP/published-sbom-offline.json"
+
+          for result in \
+            "$RUNNER_TEMP"/published-provenance-{online,offline}.json \
+            "$RUNNER_TEMP"/published-provenance-sbom-{online,offline}.json; do
+            jq -e 'length >= 1' "$result" >/dev/null
+          done
+          for result in "$RUNNER_TEMP"/published-sbom-{online,offline}.json; do
+            jq -e --slurpfile expected "$sbom" '
+              length >= 1 and
+              any(.[]; .verificationResult.statement.predicate == $expected[0])
+            ' "$result" >/dev/null
+          done
+
+          verified=false
+          for attempt in $(seq 1 18); do
+            if gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null; then
+              verified=true
+              break
+            fi
+            echo "Waiting for immutable release attestation (attempt $attempt/18)"
+            sleep 10
+          done
+          [[ "$verified" == "true" ]]
+          [[ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isImmutable \
+            --jq '(.isDraft == false) and (.isImmutable == true)')" == "true" ]]
+
+          for asset in "$clean"/*; do
+            asset_verified=false
+            for attempt in $(seq 1 6); do
+              if gh release verify-asset "$RELEASE_TAG" "$asset" \
+                --repo "$GITHUB_REPOSITORY" >/dev/null; then
+                asset_verified=true
+                break
+              fi
+              echo "Waiting to verify $(basename "$asset") (attempt $attempt/6)"
+              sleep 5
+            done
+            [[ "$asset_verified" == "true" ]]
+          done

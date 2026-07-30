@@ -12,8 +12,6 @@ with Cargo's additional pre-1.0 compatibility rules.
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-07-30
-
 ### Added
 
 - A managed blocking API for creating, controlling, waiting on, and collecting
@@ -35,5 +33,4 @@ with Cargo's additional pre-1.0 compatibility rules.
 - Detached sessions, manual EOF policy, cursor inheritance, pre-staged spawn,
   and a cross-platform facade are intentionally outside the 0.1 API.
 
-[Unreleased]: https://github.com/P4suta/conpty-oxide/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/P4suta/conpty-oxide/releases/tag/v0.1.0
+[Unreleased]: https://github.com/P4suta/conpty-oxide/commits/main

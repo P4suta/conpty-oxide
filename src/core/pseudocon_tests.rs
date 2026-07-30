@@ -3,7 +3,7 @@
 
 use super::*;
 
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex as TestMutex, OnceLock};
 use std::time::Duration;
 
 use crate::backend::ConPtyBackend;
@@ -34,6 +34,19 @@ fn complete_within_5s(name: &str, f: impl FnOnce() + Send + 'static) {
 
 fn backend() -> ConPtyBackend {
     ConPtyBackend::system().expect("ConPTY must be available on a test machine")
+}
+
+static CLOSE_OBSERVER: OnceLock<TestMutex<Option<mpsc::Sender<HPCON>>>> = OnceLock::new();
+
+unsafe extern "system" fn observe_close(hpcon: HPCON) {
+    let observer = CLOSE_OBSERVER.get_or_init(|| TestMutex::new(None));
+    if let Some(sender) = observer
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
+        let _ = sender.send(hpcon);
+    }
 }
 
 /// Creates a console plus the two user-side pipe ends that remain ours.
@@ -147,6 +160,35 @@ fn final_defense_detaches_legacy_close_until_reader_eof() {
 }
 
 #[test]
+fn detached_close_worker_invokes_the_backend() {
+    let callback_registry = CLOSE_OBSERVER.get_or_init(|| TestMutex::new(None));
+    let (closed_tx, closed_rx) = mpsc::channel();
+    {
+        let mut slot = callback_registry
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        assert!(slot.is_none(), "the close observer must not overlap itself");
+        *slot = Some(closed_tx);
+    }
+
+    let expected: HPCON = 0x5a17;
+    spawn_detached_close(
+        backend().with_test_close(observe_close),
+        expected,
+        "conpty-oxide-test-close",
+    );
+    let received = closed_rx.recv_timeout(Duration::from_secs(5));
+    *callback_registry
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = None;
+
+    assert_eq!(
+        received.expect("the detached worker must invoke the backend close export"),
+        expected
+    );
+}
+
+#[test]
 fn drop_user_pipe_ends_before_console() {
     complete_within_5s("drop_user_pipe_ends_before_console", || {
         let (console, conout_read, conin_write) = console_and_user_ends(backend());
@@ -210,6 +252,14 @@ fn input_close_worker_spawn_failure_keeps_close_retryable() {
             let (console, conout_read, conin_write) = console_and_user_ends(legacy);
             let shared = Arc::clone(console.shared());
 
+            #[cfg(feature = "tracing")]
+            {
+                let events = crate::tracing_test_support::count_events(|| {
+                    shared.request_close_detached_with_worker_spawn_failure();
+                });
+                assert_eq!(events, 1, "the injected handoff failure must be observed");
+            }
+            #[cfg(not(feature = "tracing"))]
             shared.request_close_detached_with_worker_spawn_failure();
             assert!(
                 !shared.is_closed(),

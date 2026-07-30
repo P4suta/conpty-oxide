@@ -1098,6 +1098,32 @@ async fn low_level_pty_and_borrowed_halves_delegate_io() {
 }
 
 #[tokio::test]
+async fn managed_session_try_wait_reports_a_completed_child() {
+    let mut session = Command::new("cmd.exe")
+        .args(["/c", "exit", "23"])
+        .spawn()
+        .expect("managed spawning must succeed");
+    let expected = complete_within("managed_session_child_completion", session.child.wait())
+        .await
+        .expect("waiting for the managed child must succeed");
+
+    assert_eq!(
+        session
+            .try_wait()
+            .expect("polling the completed managed session must succeed"),
+        Some(expected)
+    );
+
+    let output = complete_within(
+        "managed_session_try_wait_teardown",
+        session.wait_with_output(),
+    )
+    .await
+    .expect("draining the completed managed session must succeed");
+    assert_eq!(output.status(), expected);
+}
+
+#[tokio::test]
 async fn managed_session_delegates_io_and_debugs_named_parts() {
     const MARKER: &str = "tokio-managed-session-io";
     let mut session = Command::new("cmd.exe")

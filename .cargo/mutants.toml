@@ -26,4 +26,7 @@ exclude_re = [
   'src/core/pipes/overlapped\.rs:.*replace \| with \^ in ServerDirection::server_open_mode',
   'src/core/pipes/overlapped\.rs:.*replace \| with \^ in pipe_mode',
   'src/core/pipes/overlapped\.rs:\d+:20: replace \| with & in pipe_mode',
+  'src/core/pipes/overlapped\.rs:\d+:41: replace \| with & in pipe_mode',
+  'src/tracing_test_support\.rs:.*replace <impl Subscriber for EventCounter>::enabled -> bool with false',
+  'src/tracing_test_support\.rs:.*replace <impl Subscriber for EventCounter>::max_level_hint -> Option<LevelFilter> with None',
 ]

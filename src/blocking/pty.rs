@@ -500,8 +500,45 @@ impl Drop for ConinWriter {
 mod behavior_tests {
     use std::cell::Cell;
     use std::io;
+    use std::sync::Arc;
 
-    use super::{conout_error_as_eof, notify_eof_once};
+    use super::{conout_error_as_eof, notify_eof_once, Pty};
+    use crate::backend::ConPtyBackend;
+    use crate::blocking::Command;
+
+    #[test]
+    fn writer_drop_requests_close_while_the_controller_keeps_the_session_alive() {
+        let backend = ConPtyBackend::system()
+            .expect("ConPTY must be available")
+            .without_release();
+        let pty = Pty::builder()
+            .backend(backend)
+            .eof_on_root_exit(false)
+            .build()
+            .expect("building a forced-legacy pty must succeed");
+        let controller = pty.controller();
+        let shared = Arc::clone(&pty.reader.shared);
+        let child = Command::new("cmd.exe")
+            .args(["/c", "pause"])
+            .kill_on_drop(true)
+            .spawn_in(&pty)
+            .expect("spawning must succeed");
+        let (reader, writer) = pty.into_split();
+
+        drop(reader);
+        assert!(
+            !shared.is_closed(),
+            "reader retirement alone must not request pseudoconsole close"
+        );
+        drop(writer);
+        assert!(
+            shared.is_closed(),
+            "writer drop must claim pseudoconsole close while the controller keeps it alive"
+        );
+
+        drop(child);
+        drop(controller);
+    }
 
     #[test]
     fn eof_notification_runs_exactly_once() {

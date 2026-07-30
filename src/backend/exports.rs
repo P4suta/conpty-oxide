@@ -220,6 +220,17 @@ impl ConptyApi {
             clear: self.clear,
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn with_close(&self, close: unsafe extern "system" fn(HPCON)) -> Self {
+        Self {
+            create: self.create,
+            resize: self.resize,
+            close,
+            release: self.release,
+            clear: self.clear,
+        }
+    }
 }
 
 /// Loads an external DLL by absolute path under a restricted search policy.

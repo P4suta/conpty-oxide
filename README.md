@@ -96,6 +96,7 @@ package.
 - [API documentation](https://docs.rs/conpty-oxide)
 - [Examples](examples)
 - [ConPTY lifecycle and compatibility notes](docs/conpty-pitfalls.md)
+- [Release and artifact verification](docs/releasing.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
 

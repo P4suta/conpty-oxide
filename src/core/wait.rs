@@ -680,10 +680,14 @@ fn finish_legacy_close(context: &LegacyWaitContext) {
     let Some(shared) = context.shared.upgrade() else {
         return;
     };
-    if !shared.reader_finished() {
+    if should_wait_for_legacy_reader(shared.reader_finished()) {
         thread::sleep(context.grace);
     }
     shared.request_close();
+}
+
+const fn should_wait_for_legacy_reader(reader_finished: bool) -> bool {
+    !reader_finished
 }
 
 fn legacy_wait_object(context: &LegacyWaitContext) -> HANDLE {
