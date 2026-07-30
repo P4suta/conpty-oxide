@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Teardown must never hang, in any drop order, with the pipe buffer full.
 //!
 //! This is the crate's headline regression. `ClosePseudoConsole` is documented
@@ -12,13 +16,13 @@
 
 #![cfg(all(windows, feature = "blocking"))]
 
-mod helpers;
+pub mod helpers;
 
 use std::time::{Duration, Instant};
 
-use conpty_oxide::blocking::{Command, Pty};
+use conpty_oxide::blocking::{Command, Session};
 
-use helpers::{legacy_pty, pty, wait_until, with_timeout};
+use helpers::{wait_until, with_timeout};
 
 /// Roughly 280 KiB of console output, well past any pipe buffer.
 ///
@@ -36,31 +40,22 @@ const FILL: Duration = Duration::from_millis(500);
 /// What "prompt" means for the teardown itself.
 const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 
-/// Runs one drop-order case: flood the session built by `build`, read
-/// nothing, then hand the `Pty` to `teardown` and require it to finish
-/// quickly.
+/// Runs one drop-order case: flood a managed session, read nothing, then hand
+/// it to `teardown` and require it to finish quickly.
 ///
-/// Every case runs twice — once on the machine's natural lifecycle mode and
-/// once on a forced-legacy session — because the two modes tear down through
-/// different code paths (a released session's close never blocks; a legacy
-/// one relies on the drop order having retired the reader first).
-fn drop_order_completes(build: impl FnOnce() -> Pty, teardown: impl FnOnce(Pty)) {
+/// The CI matrix runs this on both legacy and released Windows versions.
+fn drop_order_completes(teardown: impl FnOnce(Session)) {
     with_timeout(BUDGET, || {
-        let pty = build();
-        // `kill_on_drop` is cleanup, not part of the scenario: the child is
-        // dropped only after the session is gone, so the tree cannot outlive
-        // the test even though the pseudoconsole it was attached to is dead.
-        let mut child = Command::new("cmd.exe")
+        let mut session = Command::new("cmd.exe")
             .raw_arg(FLOOD)
-            .kill_on_drop(true)
-            .spawn(&pty)
+            .spawn()
             .expect("spawning must succeed");
 
         // Give the console host time to fill the pipe, and confirm that it
         // did: a child that already exited would mean the output fit after
         // all, and the teardown below would be testing nothing.
         let exited = wait_until(FILL, || {
-            child.try_wait().expect("polling must succeed").is_some()
+            session.try_wait().expect("polling must succeed").is_some()
         });
         assert!(
             !exited,
@@ -70,24 +65,23 @@ fn drop_order_completes(build: impl FnOnce() -> Pty, teardown: impl FnOnce(Pty))
         );
 
         let started = Instant::now();
-        teardown(pty);
+        teardown(session);
         let elapsed = started.elapsed();
         assert!(
             elapsed < TEARDOWN_BUDGET,
             "tearing the session down took {elapsed:?}, over the \
              {TEARDOWN_BUDGET:?} budget"
         );
-
-        drop(child);
     });
 }
 
 /// Drop order: read half, write half, controller.
-fn read_half_first(pty: Pty) {
-    let (reader, writer, controller) = pty.into_split();
-    drop(reader);
-    drop(writer);
-    drop(controller);
+fn read_half_first(session: Session) {
+    let parts = session.into_parts();
+    drop(parts.output);
+    drop(parts.input);
+    drop(parts.controller);
+    drop(parts.child);
 }
 
 /// Drop order: controller, write half, read half.
@@ -95,57 +89,39 @@ fn read_half_first(pty: Pty) {
 /// The awkward order: the controller owns the pseudoconsole, so this drops it
 /// while a live read half is still registered and the console host is blocked
 /// writing.
-fn controller_first(pty: Pty) {
-    let (reader, writer, controller) = pty.into_split();
-    drop(controller);
-    drop(writer);
-    drop(reader);
+fn controller_first(session: Session) {
+    let parts = session.into_parts();
+    drop(parts.controller);
+    drop(parts.input);
+    drop(parts.output);
+    drop(parts.child);
 }
 
 /// Drop order: write half, controller, read half.
-fn write_half_first(pty: Pty) {
-    let (reader, writer, controller) = pty.into_split();
-    drop(writer);
-    drop(controller);
-    drop(reader);
+fn write_half_first(session: Session) {
+    let parts = session.into_parts();
+    drop(parts.input);
+    drop(parts.controller);
+    drop(parts.output);
+    drop(parts.child);
 }
 
 #[test]
 fn dropping_the_whole_session_completes() {
-    drop_order_completes(pty, drop);
+    drop_order_completes(drop);
 }
 
 #[test]
 fn dropping_the_read_half_first_completes() {
-    drop_order_completes(pty, read_half_first);
+    drop_order_completes(read_half_first);
 }
 
 #[test]
 fn dropping_the_controller_first_completes() {
-    drop_order_completes(pty, controller_first);
+    drop_order_completes(controller_first);
 }
 
 #[test]
 fn dropping_the_write_half_first_completes() {
-    drop_order_completes(pty, write_half_first);
-}
-
-#[test]
-fn dropping_the_whole_forced_legacy_session_completes() {
-    drop_order_completes(legacy_pty, drop);
-}
-
-#[test]
-fn dropping_the_read_half_of_a_forced_legacy_session_first_completes() {
-    drop_order_completes(legacy_pty, read_half_first);
-}
-
-#[test]
-fn dropping_the_controller_of_a_forced_legacy_session_first_completes() {
-    drop_order_completes(legacy_pty, controller_first);
-}
-
-#[test]
-fn dropping_the_write_half_of_a_forced_legacy_session_first_completes() {
-    drop_order_completes(legacy_pty, write_half_first);
+    drop_order_completes(write_half_first);
 }

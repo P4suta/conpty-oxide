@@ -1,3 +1,6 @@
+﻿# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 <#
 .SYNOPSIS
     Lays out a conpty.dll / OpenConsole.exe bundle for the external-backend tests.
@@ -62,8 +65,8 @@ $ErrorActionPreference = 'Stop'
 # a progress bar, and in CI it produces megabytes of useless log noise.
 $ProgressPreference = 'SilentlyContinue'
 
-# A launcher started from PowerShell 7 — `just`, whose Windows shell is
-# `powershell.exe` — hands PowerShell 7's PSModulePath down to Windows
+# A launcher started from PowerShell 7 - `just`, whose Windows shell is
+# `powershell.exe` - hands PowerShell 7's PSModulePath down to Windows
 # PowerShell. Its autoloader then finds PowerShell 7's Core-only copies of the
 # built-in modules, refuses them, and stops looking, so cmdlets as ordinary as
 # Get-FileHash simply do not exist. Putting this host's own module directory
@@ -107,11 +110,11 @@ function Get-ProductVersion([string] $Path) {
 New-Item -ItemType Directory -Force -Path $PackageDirectory | Out-Null
 
 if (Test-Path -LiteralPath $packagePath) {
-    Write-Host "Using the cached package at $packagePath"
+    Write-Information "Using the cached package at $packagePath" -InformationAction Continue
 }
 else {
     $url = "https://www.nuget.org/api/v2/package/$packageId/$Version"
-    Write-Host "Downloading $url"
+    Write-Information "Downloading $url" -InformationAction Continue
     # Windows PowerShell 5.1 defaults to TLS 1.0, which nuget.org rejects.
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $partial = "$packagePath.partial"
@@ -130,7 +133,7 @@ if ($actual -ne $Sha256.ToUpperInvariant()) {
     Remove-Item -LiteralPath $packagePath -Force
     throw "SHA-256 mismatch for $packageId $Version`n  expected $Sha256`n  actual   $actual`nThe cached package has been removed."
 }
-Write-Host "Verified SHA-256 $actual"
+Write-Information "Verified SHA-256 $actual" -InformationAction Continue
 
 # --- 3. Extract the two files -----------------------------------------------
 
@@ -143,7 +146,7 @@ try {
         if (-not $entry) { throw "'$($pair[0])' is missing from $packageId $Version" }
         $target = Join-Path $Destination $pair[1]
         [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
-        Write-Host "Extracted $($pair[0]) -> $target"
+        Write-Information "Extracted $($pair[0]) -> $target" -InformationAction Continue
     }
 }
 finally {
@@ -160,8 +163,8 @@ if ($dllVersion -ne $hostVersion) {
     throw "the extracted pair disagrees: conpty.dll reports $dllVersion but OpenConsole.exe reports $hostVersion"
 }
 
-Write-Host ""
-Write-Host "$packageId $Version ($Arch), ProductVersion $dllVersion"
-Write-Host "Bundle ready at $Destination"
-Write-Host "Run the external-backend tests with:"
-Write-Host "  `$env:CONPTY_OXIDE_TEST_DLL_DIR = '$Destination'"
+Write-Information "" -InformationAction Continue
+Write-Information "$packageId $Version ($Arch), ProductVersion $dllVersion" -InformationAction Continue
+Write-Information "Bundle ready at $Destination" -InformationAction Continue
+Write-Information "Run the external-backend tests with:" -InformationAction Continue
+Write-Information "  `$env:CONPTY_OXIDE_TEST_DLL_DIR = '$Destination'" -InformationAction Continue

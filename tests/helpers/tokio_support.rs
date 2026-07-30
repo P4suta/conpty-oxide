@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Session harness for the asynchronous (Tokio) front end.
 //!
 //! The shape is deliberately different from the blocking harness. Async makes
@@ -27,46 +31,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
-use conpty_oxide::{
-    Child, Command, ConPtyBackend, ExitStatus, OwnedReadHalf, OwnedWriteHalf, Pty, PtyController,
-    Size,
-};
+use conpty_oxide::tokio::{Child, Command, OwnedReadHalf, OwnedWriteHalf};
+use conpty_oxide::{ExitStatus, PtyController, SessionOptions};
 
 use super::{find_descendant, strip_escapes, POLL_INTERVAL};
-
-/// Builds a default 24x80 session.
-///
-/// Like every constructor here, this has to run inside a Tokio runtime: an
-/// async session registers its pipes with the runtime's I/O driver.
-pub fn pty() -> Pty {
-    Pty::builder().build().expect("building a pty must succeed")
-}
-
-/// Builds a session of the given size.
-pub fn pty_with_size(size: Size) -> Pty {
-    Pty::builder()
-        .size(size)
-        .build()
-        .expect("building a pty must succeed")
-}
-
-/// Builds a default 24x80 session forced onto the legacy shutdown path.
-///
-/// The backend clone has its `ReleasePseudoConsole` export stripped
-/// (`ConPtyBackend::without_release`, a hidden test hook), so the session
-/// behaves as on Windows versions before 11 24H2 regardless of the machine it
-/// runs on: the console host outlives the child, and end-of-file has to be
-/// *produced* by the crate's legacy watcher rather than merely observed.
-pub fn legacy_pty() -> Pty {
-    let backend = ConPtyBackend::system()
-        .expect("ConPTY must be available")
-        .without_release();
-    assert!(!backend.supports_release());
-    Pty::builder()
-        .backend(backend)
-        .build()
-        .expect("building a forced-legacy pty must succeed")
-}
 
 /// Awaits `body`, failing the test if it has not finished within `limit`.
 ///
@@ -75,11 +43,14 @@ pub fn legacy_pty() -> Pty {
 /// *blocked* thread — a destructor that never returns occupies the runtime
 /// thread and its timer with it — which is what [`super::watchdog`] is for.
 /// Async tests use both.
+///
+/// # Panics
+///
+/// If `body` does not complete within `limit`.
 pub async fn within<F: Future>(label: &str, limit: Duration, body: F) -> F::Output {
-    match tokio::time::timeout(limit, body).await {
-        Ok(value) => value,
-        Err(_) => panic!("`{label}` did not finish within {limit:?}"),
-    }
+    tokio::time::timeout(limit, body)
+        .await
+        .unwrap_or_else(|_elapsed| panic!("`{label}` did not finish within {limit:?}"))
 }
 
 /// Polls `condition` until it holds or `limit` elapses; returns whether it
@@ -129,6 +100,11 @@ pub struct OutputStream {
 
 impl OutputStream {
     /// Starts draining `half` until end-of-file.
+    ///
+    /// # Panics
+    ///
+    /// If called outside a Tokio runtime.
+    #[must_use]
     pub fn spawn(mut half: OwnedReadHalf) -> Self {
         let (sender, chunks) = mpsc::unbounded_channel();
         let task = tokio::spawn(async move {
@@ -157,11 +133,13 @@ impl OutputStream {
     }
 
     /// Everything delivered so far, decoded lossily and left as-is.
+    #[must_use]
     pub fn text(&self) -> String {
         String::from_utf8_lossy(&self.seen).into_owned()
     }
 
     /// [`Self::text`] with escape sequences removed.
+    #[must_use]
     pub fn rendered(&self) -> String {
         strip_escapes(&self.text())
     }
@@ -191,18 +169,19 @@ impl OutputStream {
         limit: Duration,
         mut predicate: impl FnMut(&str) -> bool,
     ) {
-        let outcome = tokio::time::timeout(limit, self.collect_until(&mut predicate)).await;
-        match outcome {
-            Ok(true) => {}
-            Ok(false) => panic!(
-                "the session reached end-of-file before {what} appeared: {:?}",
-                self.rendered()
-            ),
-            Err(_) => panic!(
-                "{what} did not appear within {limit:?}: {:?}",
-                self.rendered()
-            ),
-        }
+        let reached = tokio::time::timeout(limit, self.collect_until(&mut predicate))
+            .await
+            .unwrap_or_else(|_elapsed| {
+                panic!(
+                    "{what} did not appear within {limit:?}: {:?}",
+                    self.rendered()
+                )
+            });
+        assert!(
+            reached,
+            "the session reached end-of-file before {what} appeared: {:?}",
+            self.rendered()
+        );
     }
 
     /// Accumulates chunks until `predicate` holds; `false` means end-of-file
@@ -223,6 +202,10 @@ impl OutputStream {
     ///
     /// This is the strongest assertion the harness makes: it returns only once
     /// the crate's own shutdown path has produced end-of-file.
+    ///
+    /// # Panics
+    ///
+    /// If the reader task panics.
     pub async fn join(mut self) -> Vec<u8> {
         self.task.await.expect("the reader task must not panic");
         // The task is gone, so its sender is too and the channel drains to a
@@ -246,6 +229,11 @@ pub struct Input {
 
 impl Input {
     /// Starts the writer task on `half`.
+    ///
+    /// # Panics
+    ///
+    /// If called outside a Tokio runtime.
+    #[must_use]
     pub fn spawn(mut half: OwnedWriteHalf) -> Self {
         let (sender, mut inbox) = mpsc::unbounded_channel::<Vec<u8>>();
         let task = tokio::spawn(async move {
@@ -270,6 +258,10 @@ impl Input {
     }
 
     /// Sends raw console input.
+    ///
+    /// # Panics
+    ///
+    /// If the writer task has stopped before accepting the bytes.
     pub fn write_bytes(&self, bytes: &[u8]) {
         self.sender
             .send(bytes.to_vec())
@@ -280,6 +272,10 @@ impl Input {
     ///
     /// Call this only once the child has exited: on a live session it makes
     /// the console host terminate every client.
+    ///
+    /// # Panics
+    ///
+    /// If the writer task panics.
     pub async fn close(self) {
         let Self { sender, task } = self;
         drop(sender);
@@ -294,33 +290,37 @@ impl Input {
 /// The fields are public so a test can take the session apart and retire the
 /// pieces in whatever order it wants to exercise.
 pub struct Session {
+    /// Root child attached to the pseudoconsole.
     pub child: Child,
+    /// Task-backed rendered-output stream.
     pub output: OutputStream,
+    /// Task-backed console input.
     pub input: Input,
+    /// Cloneable control handle for the session.
     pub controller: PtyController,
 }
 
 impl Session {
     /// Spawns `command` in a fresh 24x80 session.
     pub fn start(command: &mut Command) -> Self {
-        Self::start_in(pty(), command)
+        Self::start_with(command, SessionOptions::default())
     }
 
-    /// Spawns `command` in `pty` and starts both tasks.
-    pub fn start_in(pty: Pty, command: &mut Command) -> Self {
-        let child = command.spawn(&pty).expect("spawning must succeed");
-        Self::attach(pty, child)
-    }
-
-    /// Starts servicing an already-spawned child, which ConPTY requires to
-    /// happen while the child runs.
-    pub fn attach(pty: Pty, child: Child) -> Self {
-        let (reader, writer, controller) = pty.into_split();
+    /// Spawns `command` with managed options and starts both tasks.
+    ///
+    /// # Panics
+    ///
+    /// If the child cannot be started.
+    pub fn start_with(command: &mut Command, options: SessionOptions) -> Self {
+        let parts = command
+            .spawn_with(options)
+            .expect("spawning must succeed")
+            .into_parts();
         Self {
-            child,
-            output: OutputStream::spawn(reader),
-            input: Input::spawn(writer),
-            controller,
+            child: parts.child,
+            output: OutputStream::spawn(parts.output),
+            input: Input::spawn(parts.input),
+            controller: parts.controller,
         }
     }
 
@@ -338,6 +338,10 @@ impl Session {
 
     /// [`Self::finish`] without decoding or filtering, for tests that assert
     /// on the virtual-terminal stream itself.
+    ///
+    /// # Panics
+    ///
+    /// If waiting for the child or either I/O task fails.
     pub async fn finish_raw(self) -> (Vec<u8>, ExitStatus) {
         let Self {
             mut child,

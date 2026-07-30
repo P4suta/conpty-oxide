@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The bundled `conpty.dll` backend, driven from the asynchronous front end.
 //!
 //! `backend_dll.rs` already runs the crate's whole contract against a real
@@ -22,15 +26,16 @@
 
 #![cfg(all(windows, feature = "tokio"))]
 
-mod helpers;
+pub mod helpers;
 
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use conpty_oxide::{Command, ConPtyBackend, Error, Pty};
+use conpty_oxide::tokio::Command;
+use conpty_oxide::{ConPtyBackend, ErrorKind, SessionOptions};
 
-use helpers::asyn::{within, Session};
+use helpers::tokio_support::{within, Session};
 use helpers::watchdog;
 
 /// Names the directory holding the `conpty.dll` bundle to test against.
@@ -72,15 +77,9 @@ fn bundle() -> Option<ConPtyBackend> {
     Some(backend)
 }
 
-/// Builds a default 24x80 async session on the bundle.
-///
-/// Must be called from inside a runtime, like every other async session.
-fn bundle_pty() -> Option<Pty> {
-    let pty = Pty::builder()
-        .backend(bundle()?)
-        .build()
-        .expect("building an async session on the bundle must succeed");
-    Some(pty)
+/// Builds managed options for an async session on the bundle.
+fn bundle_options() -> Option<SessionOptions> {
+    Some(SessionOptions::new().backend(bundle()?))
 }
 
 /// The smoke test: a child's output comes back through the registered pipes,
@@ -94,22 +93,24 @@ fn bundle_pty() -> Option<Pty> {
 #[tokio::test]
 async fn an_async_session_on_the_bundle_echoes_and_reaches_end_of_file() {
     let _watchdog = watchdog(BUDGET);
-    let Some(pty) = bundle_pty() else { return };
+    let Some(options) = bundle_options() else {
+        return;
+    };
 
     within("an_async_session_on_the_bundle", DEADLINE, async {
         const MARKER: &str = "conpty-oxide-async-bundle-echo";
 
+        let session = Session::start_with(
+            Command::new("cmd.exe").args(["/c", "echo", MARKER]),
+            options,
+        );
         assert_eq!(
-            pty.supports_clear(),
+            session.controller.supports_clear(),
             !cfg!(target_arch = "x86"),
             "a bundled conpty.dll exports ConptyClearPseudoConsole, and the \
              crate offers it everywhere except on 32-bit x86"
         );
-
-        let (output, status) =
-            Session::start_in(pty, Command::new("cmd.exe").args(["/c", "echo", MARKER]))
-                .finish()
-                .await;
+        let (output, status) = session.finish().await;
 
         assert!(
             output.contains(MARKER),
@@ -135,15 +136,16 @@ async fn an_async_session_on_the_bundle_echoes_and_reaches_end_of_file() {
 #[tokio::test]
 async fn clearing_an_async_session_on_the_bundle_agrees_with_the_capability_query() {
     let _watchdog = watchdog(BUDGET);
-    let Some(pty) = bundle_pty() else { return };
+    let Some(options) = bundle_options() else {
+        return;
+    };
 
     within("clearing_an_async_session_on_the_bundle", DEADLINE, async {
         const BEFORE: &str = "conpty-oxide-async-bundle-before-clear";
         const AFTER: &str = "conpty-oxide-async-bundle-after-clear";
 
-        let supported = pty.supports_clear();
-        let mut session = Session::start_in(pty, &mut Command::new("cmd.exe"));
-        assert_eq!(session.controller.supports_clear(), supported);
+        let mut session = Session::start_with(&mut Command::new("cmd.exe"), options);
+        let supported = session.controller.supports_clear();
 
         session.output.wait_for(">", ANSWER).await;
         session.write_line(&format!("echo {BEFORE}"));
@@ -154,14 +156,14 @@ async fn clearing_an_async_session_on_the_bundle_agrees_with_the_capability_quer
                 supported,
                 "clear succeeded on a backend that reports no clear support"
             ),
-            Err(Error::UnsupportedFeature { feature }) => {
+            Err(err) if err.kind() == ErrorKind::UnsupportedFeature => {
                 assert!(
                     !supported,
                     "clear was refused as unsupported on a backend that reports \
                      clear support"
                 );
-                assert_eq!(feature, "ClearPseudoConsole");
-            }
+                assert!(err.to_string().contains("ClearPseudoConsole"));
+            },
             Err(other) => panic!("clearing the bundle's console failed: {other}"),
         }
 

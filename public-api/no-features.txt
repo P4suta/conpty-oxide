@@ -1,0 +1,165 @@
+﻿pub mod conpty_oxide
+#[non_exhaustive] pub enum conpty_oxide::BackendErrorKind
+pub conpty_oxide::BackendErrorKind::DllNotFound
+pub conpty_oxide::BackendErrorKind::MissingExport
+pub conpty_oxide::BackendErrorKind::OpenConsoleMissing
+pub conpty_oxide::BackendErrorKind::Unsupported
+pub conpty_oxide::BackendErrorKind::VersionMismatch
+impl core::clone::Clone for conpty_oxide::BackendErrorKind
+pub fn conpty_oxide::BackendErrorKind::clone(&self) -> conpty_oxide::BackendErrorKind
+impl core::cmp::Eq for conpty_oxide::BackendErrorKind
+impl core::cmp::PartialEq for conpty_oxide::BackendErrorKind
+pub fn conpty_oxide::BackendErrorKind::eq(&self, &conpty_oxide::BackendErrorKind) -> bool
+impl core::fmt::Debug for conpty_oxide::BackendErrorKind
+pub fn conpty_oxide::BackendErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for conpty_oxide::BackendErrorKind
+pub fn conpty_oxide::BackendErrorKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for conpty_oxide::BackendErrorKind
+impl core::marker::StructuralPartialEq for conpty_oxide::BackendErrorKind
+impl core::marker::Freeze for conpty_oxide::BackendErrorKind
+impl core::marker::Send for conpty_oxide::BackendErrorKind
+impl core::marker::Sync for conpty_oxide::BackendErrorKind
+impl core::marker::Unpin for conpty_oxide::BackendErrorKind
+impl core::marker::UnsafeUnpin for conpty_oxide::BackendErrorKind
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::BackendErrorKind
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::BackendErrorKind
+#[non_exhaustive] pub enum conpty_oxide::ErrorKind
+pub conpty_oxide::ErrorKind::Backend
+pub conpty_oxide::ErrorKind::Clear
+pub conpty_oxide::ErrorKind::CreateConsole
+pub conpty_oxide::ErrorKind::InvalidSize
+pub conpty_oxide::ErrorKind::Io
+pub conpty_oxide::ErrorKind::Kill
+pub conpty_oxide::ErrorKind::Resize
+pub conpty_oxide::ErrorKind::Spawn
+pub conpty_oxide::ErrorKind::UnsupportedFeature
+pub conpty_oxide::ErrorKind::Wait
+impl core::clone::Clone for conpty_oxide::ErrorKind
+pub fn conpty_oxide::ErrorKind::clone(&self) -> conpty_oxide::ErrorKind
+impl core::cmp::Eq for conpty_oxide::ErrorKind
+impl core::cmp::PartialEq for conpty_oxide::ErrorKind
+pub fn conpty_oxide::ErrorKind::eq(&self, &conpty_oxide::ErrorKind) -> bool
+impl core::fmt::Debug for conpty_oxide::ErrorKind
+pub fn conpty_oxide::ErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for conpty_oxide::ErrorKind
+pub fn conpty_oxide::ErrorKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for conpty_oxide::ErrorKind
+impl core::marker::StructuralPartialEq for conpty_oxide::ErrorKind
+impl core::marker::Freeze for conpty_oxide::ErrorKind
+impl core::marker::Send for conpty_oxide::ErrorKind
+impl core::marker::Sync for conpty_oxide::ErrorKind
+impl core::marker::Unpin for conpty_oxide::ErrorKind
+impl core::marker::UnsafeUnpin for conpty_oxide::ErrorKind
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::ErrorKind
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::ErrorKind
+pub struct conpty_oxide::BackendError
+impl conpty_oxide::BackendError
+pub const fn conpty_oxide::BackendError::io_error(&self) -> core::option::Option<&core::io::error::Error>
+pub const fn conpty_oxide::BackendError::kind(&self) -> conpty_oxide::BackendErrorKind
+impl core::convert::From<conpty_oxide::BackendError> for conpty_oxide::Error
+pub fn conpty_oxide::Error::from(conpty_oxide::BackendError) -> Self
+impl core::error::Error for conpty_oxide::BackendError
+pub fn conpty_oxide::BackendError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for conpty_oxide::BackendError
+pub fn conpty_oxide::BackendError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for conpty_oxide::BackendError
+pub fn conpty_oxide::BackendError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::BackendError
+impl core::marker::Send for conpty_oxide::BackendError
+impl core::marker::Sync for conpty_oxide::BackendError
+impl core::marker::Unpin for conpty_oxide::BackendError
+impl core::marker::UnsafeUnpin for conpty_oxide::BackendError
+impl !core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::BackendError
+impl !core::panic::unwind_safe::UnwindSafe for conpty_oxide::BackendError
+pub struct conpty_oxide::ConPtyBackend
+impl conpty_oxide::ConPtyBackend
+pub fn conpty_oxide::ConPtyBackend::auto() -> core::result::Result<Self, conpty_oxide::BackendError>
+pub fn conpty_oxide::ConPtyBackend::from_dir(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, conpty_oxide::BackendError>
+pub fn conpty_oxide::ConPtyBackend::supports_clear(&self) -> bool
+pub fn conpty_oxide::ConPtyBackend::system() -> core::result::Result<Self, conpty_oxide::BackendError>
+impl core::clone::Clone for conpty_oxide::ConPtyBackend
+pub fn conpty_oxide::ConPtyBackend::clone(&self) -> Self
+impl core::fmt::Debug for conpty_oxide::ConPtyBackend
+pub fn conpty_oxide::ConPtyBackend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::ConPtyBackend
+impl core::marker::Send for conpty_oxide::ConPtyBackend
+impl core::marker::Sync for conpty_oxide::ConPtyBackend
+impl core::marker::Unpin for conpty_oxide::ConPtyBackend
+impl core::marker::UnsafeUnpin for conpty_oxide::ConPtyBackend
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::ConPtyBackend
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::ConPtyBackend
+pub struct conpty_oxide::Error
+impl conpty_oxide::Error
+pub const fn conpty_oxide::Error::backend_error(&self) -> core::option::Option<&conpty_oxide::BackendError>
+pub const fn conpty_oxide::Error::io_error(&self) -> core::option::Option<&core::io::error::Error>
+pub const fn conpty_oxide::Error::kind(&self) -> conpty_oxide::ErrorKind
+impl core::convert::From<conpty_oxide::BackendError> for conpty_oxide::Error
+pub fn conpty_oxide::Error::from(conpty_oxide::BackendError) -> Self
+impl core::convert::From<core::io::error::Error> for conpty_oxide::Error
+pub fn conpty_oxide::Error::from(core::io::error::Error) -> Self
+impl core::error::Error for conpty_oxide::Error
+pub fn conpty_oxide::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for conpty_oxide::Error
+pub fn conpty_oxide::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for conpty_oxide::Error
+pub fn conpty_oxide::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::Error
+impl core::marker::Send for conpty_oxide::Error
+impl core::marker::Sync for conpty_oxide::Error
+impl core::marker::Unpin for conpty_oxide::Error
+impl core::marker::UnsafeUnpin for conpty_oxide::Error
+impl !core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::Error
+impl !core::panic::unwind_safe::UnwindSafe for conpty_oxide::Error
+pub struct conpty_oxide::ExitStatus(_)
+impl conpty_oxide::ExitStatus
+pub const fn conpty_oxide::ExitStatus::code(&self) -> u32
+pub const fn conpty_oxide::ExitStatus::success(&self) -> bool
+impl core::clone::Clone for conpty_oxide::ExitStatus
+pub fn conpty_oxide::ExitStatus::clone(&self) -> conpty_oxide::ExitStatus
+impl core::cmp::Eq for conpty_oxide::ExitStatus
+impl core::cmp::PartialEq for conpty_oxide::ExitStatus
+pub fn conpty_oxide::ExitStatus::eq(&self, &conpty_oxide::ExitStatus) -> bool
+impl core::fmt::Debug for conpty_oxide::ExitStatus
+pub fn conpty_oxide::ExitStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for conpty_oxide::ExitStatus
+pub fn conpty_oxide::ExitStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for conpty_oxide::ExitStatus
+pub fn conpty_oxide::ExitStatus::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for conpty_oxide::ExitStatus
+impl core::marker::StructuralPartialEq for conpty_oxide::ExitStatus
+impl core::marker::Freeze for conpty_oxide::ExitStatus
+impl core::marker::Send for conpty_oxide::ExitStatus
+impl core::marker::Sync for conpty_oxide::ExitStatus
+impl core::marker::Unpin for conpty_oxide::ExitStatus
+impl core::marker::UnsafeUnpin for conpty_oxide::ExitStatus
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::ExitStatus
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::ExitStatus
+pub struct conpty_oxide::Size
+impl conpty_oxide::Size
+pub const conpty_oxide::Size::MAX_DIMENSION: u16
+pub const fn conpty_oxide::Size::cols(&self) -> u16
+pub const fn conpty_oxide::Size::rows(&self) -> u16
+pub const fn conpty_oxide::Size::try_new(u16, u16) -> conpty_oxide::Result<Self>
+impl core::clone::Clone for conpty_oxide::Size
+pub fn conpty_oxide::Size::clone(&self) -> conpty_oxide::Size
+impl core::cmp::Eq for conpty_oxide::Size
+impl core::cmp::PartialEq for conpty_oxide::Size
+pub fn conpty_oxide::Size::eq(&self, &conpty_oxide::Size) -> bool
+impl core::default::Default for conpty_oxide::Size
+pub fn conpty_oxide::Size::default() -> Self
+impl core::fmt::Debug for conpty_oxide::Size
+pub fn conpty_oxide::Size::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for conpty_oxide::Size
+pub fn conpty_oxide::Size::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for conpty_oxide::Size
+pub fn conpty_oxide::Size::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for conpty_oxide::Size
+impl core::marker::StructuralPartialEq for conpty_oxide::Size
+impl core::marker::Freeze for conpty_oxide::Size
+impl core::marker::Send for conpty_oxide::Size
+impl core::marker::Sync for conpty_oxide::Size
+impl core::marker::Unpin for conpty_oxide::Size
+impl core::marker::UnsafeUnpin for conpty_oxide::Size
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::Size
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::Size
+pub type conpty_oxide::Result<T> = core::result::Result<T, conpty_oxide::Error>

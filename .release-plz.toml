@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[workspace]
+# The prepared v0.1.0 release PR enables this after moving the curated
+# Unreleased notes into the first versioned section.
+changelog_update = false
+dependencies_update = false
+release_always = false
+git_release_draft = true
+git_release_latest = false
+git_release_type = "auto"
+git_tag_name = "v{{ version }}"
+publish_all_features = true
+publish_no_verify = false
+publish_timeout = "30m"
+semver_check = true

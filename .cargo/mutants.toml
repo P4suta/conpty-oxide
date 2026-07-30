@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Exercise the complete public surface and use the same runner/profile
+# semantics as the normal test suite. Start with no exclusions: surviving or
+# timed-out mutants are test gaps to classify individually, not categories to
+# hide.
+all_features = true
+test_tool = "nextest"
+additional_cargo_args = ["--locked"]
+timeout_multiplier = 5.0
+minimum_test_timeout = 60.0
+gitignore = true
+cap_lints = false
+
+# Individually audited equivalent mutations. Each expression below has a
+# proof in docs/mutation-testing.md; keep these regexes tied to one file,
+# function, operator, and replacement so new mutations remain visible.
+exclude_re = [
+  'src/(blocking|tokio)/pty\.rs:.*replace Pty::builder -> PtyBuilder with Default::default\(\)',
+  'src/tokio/pty\.rs:.*replace <impl AsyncWrite for (Pty|OwnedWriteHalf|ConinWriter)>::poll_flush .* with Poll::from\(Ok\(\(\)\)\)',
+  'src/tokio/session\.rs:.*replace <impl AsyncWrite for Session>::poll_flush .* with Poll::from\(Ok\(\(\)\)\)',
+  'src/backend/exports\.rs:.*replace \| with \^ in restricted_search_flags',
+  'src/core/proc\.rs:.*replace \| with \^ in spawn',
+  'src/core/pipes/overlapped\.rs:.*replace \| with \^ in ServerDirection::server_open_mode',
+  'src/core/pipes/overlapped\.rs:.*replace \| with \^ in pipe_mode',
+  'src/core/pipes/overlapped\.rs:\d+:20: replace \| with & in pipe_mode',
+  'src/core/pipes/overlapped\.rs:\d+:41: replace \| with & in pipe_mode',
+  'src/tracing_test_support\.rs:.*replace <impl Subscriber for EventCounter>::enabled -> bool with false',
+  'src/tracing_test_support\.rs:.*replace <impl Subscriber for EventCounter>::max_level_hint -> Option<LevelFilter> with None',
+]

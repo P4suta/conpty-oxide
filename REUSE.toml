@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+version = 1
+
+# Machine-generated lockfiles do not contain copyrightable authorship. CC0
+# keeps their redistribution unambiguous without pretending they are part of
+# the crate's hand-authored dual-licensed source.
+[[annotations]]
+path = ["Cargo.lock", "mise.lock"]
+precedence = "override"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+# cargo-public-api output is machine-generated and intentionally kept byte-for-
+# byte comparable with fresh tool output.
+[[annotations]]
+path = "public-api/*.txt"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# These conventional root copies remain for Cargo ecosystem tooling. Canonical
+# license texts used by REUSE live in LICENSES/.
+[[annotations]]
+path = "LICENSE-APACHE"
+precedence = "override"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "LICENSE-MIT"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>"
+SPDX-License-Identifier = "MIT"

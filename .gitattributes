@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# The formatters emit Unix newlines. Keep GitHub-hosted Windows and developer
+# checkouts from rewriting detected text files before policy checks run.
+* text=auto eol=lf
+
+# Public API snapshots are generated with LF-only output and compared byte for
+# byte.
+public-api/*.txt text eol=lf

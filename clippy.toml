@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Product and platform names are prose, not Rust identifiers. `..` preserves
+# Clippy's built-in proper-name list.
+doc-valid-idents = ["ConPTY", "NuGet", "OpenConsole", "Tokio", "Win32", ".."]

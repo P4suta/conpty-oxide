@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The end-of-file contract, for the asynchronous front end.
 //!
 //! This is the promise the crate exists to make: a reader that keeps reading
@@ -11,23 +15,21 @@
 //! itself, which would produce end-of-file even if the crate's own shutdown
 //! path were completely broken.
 //!
-//! Each test runs twice, once on the machine's natural lifecycle mode and once
-//! on a forced-legacy session. Where `ReleasePseudoConsole` exists the console
-//! host exits on its own and end-of-file is merely *observed*; on the legacy
-//! path the crate's watcher has to *produce* it, a second or so after the root
-//! child exits. The observable contract must not differ.
+//! The CI matrix runs these tests on both lifecycle modes. Where
+//! `ReleasePseudoConsole` exists EOF is observed naturally; on legacy Windows
+//! the crate's registered wait and close worker must produce it.
 
 #![cfg(all(windows, feature = "tokio"))]
 
-mod helpers;
+pub mod helpers;
 
 use std::time::{Duration, Instant};
 
 use tokio::io::AsyncReadExt;
 
-use conpty_oxide::{Command, Pty};
+use conpty_oxide::tokio::Command;
 
-use helpers::asyn::{legacy_pty, pty, within, Session};
+use helpers::tokio_support::{within, Session};
 use helpers::{strip_escapes, watchdog};
 
 /// Outer guard. Only a genuine deadlock gets anywhere near this.
@@ -41,14 +43,18 @@ const DEADLINE: Duration = Duration::from_secs(30);
 const WAIT_BUDGET: Duration = Duration::from_secs(2);
 
 /// The body of the read-past-exit test, shared by both lifecycle modes.
-async fn reading_past_the_child_exit_reaches_eof_in(pty: Pty) {
+async fn reading_past_the_child_exit_reaches_eof_in() {
     const MARKER: &str = "conpty-oxide-async-eof-marker";
 
-    let mut child = Command::new("cmd.exe")
+    let parts = Command::new("cmd.exe")
         .args(["/c", "echo", MARKER])
-        .spawn(&pty)
-        .expect("spawning must succeed");
-    let (mut reader, writer, controller) = pty.into_split();
+        .spawn()
+        .expect("spawning must succeed")
+        .into_parts();
+    let mut child = parts.child;
+    let mut reader = parts.output;
+    let writer = parts.input;
+    let controller = parts.controller;
 
     // `echo` writes far less than a pipe buffer, so the child can run to
     // completion with nobody reading. Waiting first is what makes this test
@@ -99,26 +105,15 @@ async fn reading_past_the_child_exit_reaches_end_of_file() {
     within(
         "reading_past_the_child_exit_reaches_end_of_file",
         DEADLINE,
-        async { reading_past_the_child_exit_reaches_eof_in(pty()).await },
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn reading_past_the_child_exit_reaches_end_of_file_on_the_forced_legacy_path() {
-    let _watchdog = watchdog(BUDGET);
-    within(
-        "reading_past_the_child_exit_reaches_end_of_file_on_the_forced_legacy_path",
-        DEADLINE,
-        async { reading_past_the_child_exit_reaches_eof_in(legacy_pty()).await },
+        reading_past_the_child_exit_reaches_eof_in(),
     )
     .await;
 }
 
 /// `Child::wait` must resolve as soon as the child is gone, not after any
-/// part of the session's teardown. The async wait has more machinery than the
-/// blocking one — a `spawn_blocking` hand-off and a stored `JoinHandle` — so
-/// the latency bound from `eof_semantics.rs` is asserted here as well.
+/// part of the session's teardown. The async wait is a stored Windows
+/// registered wait, so the latency bound from `eof_semantics.rs` is asserted
+/// here as well.
 #[tokio::test]
 async fn waiting_for_a_short_child_resolves_promptly() {
     let _watchdog = watchdog(BUDGET);
@@ -156,11 +151,10 @@ async fn waiting_for_a_short_child_resolves_promptly() {
 /// line rather than as a shorter blob. On the legacy path this is the pointed
 /// test of the watcher's grace period, which is the window in which the reader
 /// has to have drained the console host's remaining output.
-async fn the_output_written_before_exit_survives_in(pty: Pty) {
+async fn the_output_written_before_exit_survives_in() {
     const LINES: u32 = 15;
 
-    let (output, status) = Session::start_in(
-        pty,
+    let (output, status) = Session::start(
         Command::new("cmd.exe")
             .raw_arg("/c for /l %i in (1,1,15) do @echo conpty-oxide-async-line-%i-end"),
     )
@@ -184,18 +178,7 @@ async fn the_output_written_before_exit_survives_the_shutdown() {
     within(
         "the_output_written_before_exit_survives_the_shutdown",
         DEADLINE,
-        async { the_output_written_before_exit_survives_in(pty()).await },
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn the_output_written_before_exit_survives_the_forced_legacy_shutdown() {
-    let _watchdog = watchdog(BUDGET);
-    within(
-        "the_output_written_before_exit_survives_the_forced_legacy_shutdown",
-        DEADLINE,
-        async { the_output_written_before_exit_survives_in(legacy_pty()).await },
+        the_output_written_before_exit_survives_in(),
     )
     .await;
 }

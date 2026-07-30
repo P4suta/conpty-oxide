@@ -1,11 +1,54 @@
-# cargo-nextest configuration.
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
 #
-# Every integration test in this crate guards against a *hang* (a
-# `ClosePseudoConsole` that never returns, an undrained output pipe, a child
-# that can no longer make progress). The tests carry their own watchdogs, but
-# nextest's slow-timeout is the outer net: a test that is still running after
-# 30 seconds is reported as slow, and after a second period it is killed
-# outright so the run always terminates.
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Keep local and CI behavior reproducible. Newer nextest releases may add
+# profile keys, but this file should not silently depend on them.
+nextest-version = { required = "0.9.140", recommended = "0.9.140" }
+
+[test-groups]
+# ConPTY sessions create a console host, pipes, a job, and at least one child.
+# A cap keeps high-core developer machines from turning the suite into an OS
+# resource stress test while leaving ordinary CI runners unconstrained.
+conpty = { max-threads = 8 }
 
 [profile.default]
-slow-timeout = { period = "30s", terminate-after = 2 }
+retries = 0
+flaky-result = "fail"
+global-timeout = "10m"
+slow-timeout = { period = "20s", terminate-after = 2, grace-period = "5s" }
+# A test process that keeps nextest's captured standard streams open after the
+# test returns is a failure, not a warning. ConPTY children use their own PTY
+# handles, so the explicit process-tree tests remain the authoritative leak
+# check for them.
+leak-timeout = { period = "500ms", result = "fail" }
+
+# Integration tests other than the compile-only public API probes create real
+# ConPTY resources. The named unit-test modules below also exercise live
+# Windows handles.
+[[profile.default.overrides]]
+filter = '(kind(test) - binary(=public_api)) | test(/^(backend|blocking|tokio|core::(job|pipes|proc|pseudocon|wait))::/)'
+test-group = "conpty"
+
+# These binaries deliberately carry 60-second in-process watchdogs. Give that
+# diagnostic guard time to fire before nextest's outer termination.
+[[profile.default.overrides]]
+filter = 'binary(backend_dll) | binary(tokio_backend_dll) | binary(resize) | binary(managed_drop_order)'
+slow-timeout = { period = "45s", terminate-after = 2, grace-period = "5s" }
+
+# The large-output and undrained-pipe cases are intentionally heavier than
+# ordinary sessions. Reserve two scheduler slots without serializing them.
+[[profile.default.overrides]]
+filter = 'binary(close_hang) | binary(tokio_close_hang) | test(/output_drains_more_than_a_pipe_buffer/)'
+threads-required = 2
+priority = 100
+
+[profile.ci]
+inherits = "default"
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"
+report-name = "conpty-oxide"
+store-success-output = false
+store-failure-output = true

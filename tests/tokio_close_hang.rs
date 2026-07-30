@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Teardown must never hang, in any drop order, with the pipe buffer full.
 //!
 //! This is the crate's headline regression, restated for the async front end.
@@ -20,13 +24,13 @@
 
 #![cfg(all(windows, feature = "tokio"))]
 
-mod helpers;
+pub mod helpers;
 
 use std::time::{Duration, Instant};
 
-use conpty_oxide::{Command, Pty};
+use conpty_oxide::tokio::{Command, Session};
 
-use helpers::asyn::{legacy_pty, pty, within};
+use helpers::tokio_support::within;
 use helpers::watchdog;
 
 /// Roughly 280 KiB of console output, well past any pipe buffer.
@@ -48,22 +52,14 @@ const FILL: Duration = Duration::from_millis(500);
 /// What "prompt" means for the teardown itself.
 const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 
-/// Runs one drop-order case: flood the session built by `build`, read nothing,
-/// then hand the `Pty` to `teardown` and require it to finish quickly.
+/// Runs one drop-order case: flood a managed session, read nothing, then hand
+/// it to `teardown` and require it to finish quickly.
 ///
-/// Every case runs twice — once on the machine's natural lifecycle mode and
-/// once on a forced-legacy session — because the two modes tear down through
-/// different code paths (a released session's close never blocks; a legacy one
-/// relies on the drop order having retired the reader first).
-async fn drop_order_completes(build: impl FnOnce() -> Pty, teardown: impl FnOnce(Pty)) {
-    let pty = build();
-    // `kill_on_drop` is cleanup, not part of the scenario: the child is
-    // dropped only after the session is gone, so the tree cannot outlive the
-    // test even though the pseudoconsole it was attached to is dead.
-    let mut child = Command::new("cmd.exe")
+/// The CI matrix runs every case on both legacy and released Windows.
+async fn drop_order_completes(teardown: impl FnOnce(Session)) {
+    let mut session = Command::new("cmd.exe")
         .raw_arg(FLOOD)
-        .kill_on_drop(true)
-        .spawn(&pty)
+        .spawn()
         .expect("spawning must succeed");
 
     // Give the console host time to fill the pipe, and confirm that it did: a
@@ -71,27 +67,25 @@ async fn drop_order_completes(build: impl FnOnce() -> Pty, teardown: impl FnOnce
     // teardown below would be testing nothing.
     tokio::time::sleep(FILL).await;
     assert!(
-        child.try_wait().expect("polling must succeed").is_none(),
+        session.try_wait().expect("polling must succeed").is_none(),
         "the child finished despite nobody reading its output, so the pipe \
          buffer never filled and this case is not exercising a blocked \
          console host"
     );
 
     let started = Instant::now();
-    teardown(pty);
+    teardown(session);
     let elapsed = started.elapsed();
     assert!(
         elapsed < TEARDOWN_BUDGET,
         "tearing the session down took {elapsed:?}, over the \
          {TEARDOWN_BUDGET:?} budget"
     );
-
-    drop(child);
 }
 
 /// [`drop_order_completes`] under the recoverable timeout.
-async fn case(name: &str, build: impl FnOnce() -> Pty, teardown: impl FnOnce(Pty)) {
-    within(name, DEADLINE, drop_order_completes(build, teardown)).await;
+async fn case(name: &str, teardown: impl FnOnce(Session)) {
+    within(name, DEADLINE, drop_order_completes(teardown)).await;
 }
 
 /// [`drop_order_completes`] with **no await between the spawn and the drop**.
@@ -115,50 +109,48 @@ async fn case(name: &str, build: impl FnOnce() -> Pty, teardown: impl FnOnce(Pty
 ///
 /// No `within` wrapper here — the runtime's timer is deliberately starved, so
 /// only the process watchdog and the elapsed-time check can report a failure.
-async fn drop_order_completes_unpolled(build: impl FnOnce() -> Pty, teardown: impl FnOnce(Pty)) {
-    let pty = build();
-    let mut child = Command::new("cmd.exe")
+fn drop_order_completes_unpolled(teardown: impl FnOnce(Session)) {
+    let mut session = Command::new("cmd.exe")
         .raw_arg(FLOOD)
-        .kill_on_drop(true)
-        .spawn(&pty)
+        .spawn()
         .expect("spawning must succeed");
 
     // Starve the runtime — I/O driver included — while the console host
     // fills the pipe behind the parked read.
     std::thread::sleep(FILL);
     assert!(
-        child.try_wait().expect("polling must succeed").is_none(),
+        session.try_wait().expect("polling must succeed").is_none(),
         "the child finished despite nobody reading its output, so the pipe \
          buffer never filled and this case is not exercising a blocked \
          console host"
     );
 
     let started = Instant::now();
-    teardown(pty);
+    teardown(session);
     let elapsed = started.elapsed();
     assert!(
         elapsed < TEARDOWN_BUDGET,
         "tearing the session down took {elapsed:?}, over the \
          {TEARDOWN_BUDGET:?} budget"
     );
-
-    drop(child);
 }
 
 /// Drop order: read half, write half, controller.
-fn read_half_first(pty: Pty) {
-    let (reader, writer, controller) = pty.into_split();
-    drop(reader);
-    drop(writer);
-    drop(controller);
+fn read_half_first(session: Session) {
+    let parts = session.into_parts();
+    drop(parts.output);
+    drop(parts.input);
+    drop(parts.controller);
+    drop(parts.child);
 }
 
 /// Drop order: write half, controller, read half.
-fn write_half_first(pty: Pty) {
-    let (reader, writer, controller) = pty.into_split();
-    drop(writer);
-    drop(controller);
-    drop(reader);
+fn write_half_first(session: Session) {
+    let parts = session.into_parts();
+    drop(parts.input);
+    drop(parts.controller);
+    drop(parts.output);
+    drop(parts.child);
 }
 
 /// Drop order: controller, write half, read half.
@@ -166,106 +158,42 @@ fn write_half_first(pty: Pty) {
 /// The awkward order: the controller owns the pseudoconsole, so this drops it
 /// while a live read half is still registered and the console host is blocked
 /// writing.
-fn controller_first(pty: Pty) {
-    let (reader, writer, controller) = pty.into_split();
-    drop(controller);
-    drop(writer);
-    drop(reader);
+fn controller_first(session: Session) {
+    let parts = session.into_parts();
+    drop(parts.controller);
+    drop(parts.input);
+    drop(parts.output);
+    drop(parts.child);
 }
 
 #[tokio::test]
 async fn dropping_the_whole_session_completes() {
     let _watchdog = watchdog(BUDGET);
-    case("dropping_the_whole_session_completes", pty, drop).await;
+    case("dropping_the_whole_session_completes", drop).await;
 }
 
 #[tokio::test]
 async fn dropping_the_read_half_first_completes() {
     let _watchdog = watchdog(BUDGET);
-    case(
-        "dropping_the_read_half_first_completes",
-        pty,
-        read_half_first,
-    )
-    .await;
+    case("dropping_the_read_half_first_completes", read_half_first).await;
 }
 
 #[tokio::test]
 async fn dropping_the_write_half_first_completes() {
     let _watchdog = watchdog(BUDGET);
-    case(
-        "dropping_the_write_half_first_completes",
-        pty,
-        write_half_first,
-    )
-    .await;
+    case("dropping_the_write_half_first_completes", write_half_first).await;
 }
 
 #[tokio::test]
 async fn dropping_the_controller_first_completes() {
     let _watchdog = watchdog(BUDGET);
-    case(
-        "dropping_the_controller_first_completes",
-        pty,
-        controller_first,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn dropping_the_whole_forced_legacy_session_completes() {
-    let _watchdog = watchdog(BUDGET);
-    case(
-        "dropping_the_whole_forced_legacy_session_completes",
-        legacy_pty,
-        drop,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn dropping_the_read_half_of_a_forced_legacy_session_first_completes() {
-    let _watchdog = watchdog(BUDGET);
-    case(
-        "dropping_the_read_half_of_a_forced_legacy_session_first_completes",
-        legacy_pty,
-        read_half_first,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn dropping_the_write_half_of_a_forced_legacy_session_first_completes() {
-    let _watchdog = watchdog(BUDGET);
-    case(
-        "dropping_the_write_half_of_a_forced_legacy_session_first_completes",
-        legacy_pty,
-        write_half_first,
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn dropping_the_controller_of_a_forced_legacy_session_first_completes() {
-    let _watchdog = watchdog(BUDGET);
-    case(
-        "dropping_the_controller_of_a_forced_legacy_session_first_completes",
-        legacy_pty,
-        controller_first,
-    )
-    .await;
+    case("dropping_the_controller_first_completes", controller_first).await;
 }
 
 #[tokio::test]
 async fn dropping_the_session_with_no_intervening_await_completes() {
     let _watchdog = watchdog(BUDGET);
-    drop_order_completes_unpolled(pty, drop).await;
-}
-
-#[tokio::test]
-async fn dropping_the_forced_legacy_session_with_no_intervening_await_completes() {
-    let _watchdog = watchdog(BUDGET);
-    drop_order_completes_unpolled(legacy_pty, drop).await;
+    drop_order_completes_unpolled(drop);
 }
 
 /// Dropping the runtime with a live, flooding session still parked in a task.
@@ -287,18 +215,15 @@ fn dropping_the_runtime_with_a_live_session_completes() {
         .expect("building a runtime must succeed");
 
     runtime.block_on(async {
-        let pty = pty();
-        let child = Command::new("cmd.exe")
+        let session = Command::new("cmd.exe")
             .raw_arg(FLOOD)
-            .kill_on_drop(true)
-            .spawn(&pty)
+            .spawn()
             .expect("spawning must succeed");
 
         // Parked forever: the only thing that will ever retire this session is
         // the runtime shutdown below.
         tokio::spawn(async move {
-            let _session = pty;
-            let _child = child;
+            let _session = session;
             std::future::pending::<()>().await;
         });
 

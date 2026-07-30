@@ -1,3 +1,0 @@
-default: true
-# Long lines are fine in prose and tables.
-MD013: false

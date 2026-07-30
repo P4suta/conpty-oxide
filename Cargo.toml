@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 [package]
 name = "conpty-oxide"
 version = "0.1.0"
@@ -6,27 +10,22 @@ rust-version = "1.75"
 license = "MIT OR Apache-2.0"
 description = "Correctness-first Windows ConPTY (pseudoconsole) library with sync and async (tokio) APIs"
 repository = "https://github.com/P4suta/conpty-oxide"
+documentation = "https://docs.rs/conpty-oxide"
 readme = "README.md"
 keywords = ["conpty", "pty", "pseudoconsole", "windows", "terminal"]
 categories = ["os::windows-apis", "asynchronous"]
-# Contributor tooling - CI, git hooks, linter and formatter settings, the test
-# fixture downloader - has no bearing on building or using the crate, so it
-# stays in the repository rather than in every published tarball. What a
-# consumer can act on is kept: the sources, the tests, the examples, the two
-# licences, the README, and docs/conpty-pitfalls.md, which the README links to
-# and which documents the behaviour this crate exists to get right.
-exclude = [
-  ".config/",
-  ".github/",
-  ".markdownlint.yaml",
-  ".yamllint",
-  "_typos.toml",
-  "committed.toml",
-  "justfile",
-  "lefthook.yml",
-  "mise.toml",
-  "scripts/",
-  "taplo.toml",
+publish = ["crates-io"]
+include = [
+  "/src/**",
+  "/tests/**",
+  "/examples/**",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/docs/**",
+  "/REUSE.toml",
+  "/LICENSE-APACHE",
+  "/LICENSE-MIT",
+  "/LICENSES/**",
 ]
 
 [features]
@@ -84,3 +83,34 @@ all-features = true
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+missing_docs = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unreachable_pub = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+unused_qualifications = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+
+# These nursery lints have a low false-positive rate and encode policies we
+# intentionally want to keep across compiler upgrades. The nursery group as a
+# whole is deliberately not enabled because it is unstable by definition.
+assigning_clones = "deny"
+missing_const_for_fn = "deny"
+option_if_let_else = "deny"
+redundant_clone = "deny"
+
+# Intentionally omitted: this lint also fires on `pub(super)` items whose
+# parent is the crate root, and recommends widening them to `pub`. That would
+# expose private domain modules and then conflict with `unreachable_pub`.
+# `unreachable_pub` above enforces the externally relevant boundary.
+
+# Test code gets diagnostic panics, but placeholders and debug macros are
+# never acceptable in a checked-in target.
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

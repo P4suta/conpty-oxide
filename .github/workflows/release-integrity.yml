@@ -1,0 +1,104 @@
+---
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name: Release integrity
+
+"on":
+  schedule:
+    - cron: "17 3 * * 5"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-integrity
+  cancel-in-progress: false
+
+jobs:
+  verify-and-scan:
+    name: Verify and scan published SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      attestations: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the latest published release
+        id: release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $json = & gh release list --repo $env:GITHUB_REPOSITORY `
+            --exclude-drafts --limit 1 --json tagName
+          if ($LASTEXITCODE -ne 0) {
+              throw "GitHub CLI could not list published releases (exit $LASTEXITCODE)."
+          }
+
+          $releases = @($json | ConvertFrom-Json)
+          if ($releases.Count -eq 0) {
+              Write-Output '::notice::No published release exists yet; integrity scan skipped.'
+              'exists=false' >> $env:GITHUB_OUTPUT
+              exit 0
+          }
+          if ($releases.Count -ne 1) {
+              throw "Expected at most one release result; got $($releases.Count)."
+          }
+
+          $release = $releases[0]
+          if ([string]::IsNullOrWhiteSpace($release.tagName)) {
+              throw 'The latest GitHub release has no tag.'
+          }
+          "tag=$($release.tagName)" >> $env:GITHUB_OUTPUT
+          'exists=true' >> $env:GITHUB_OUTPUT
+
+      - name: Verify the immutable release and attestations
+        id: verify
+        if: steps.release.outputs.exists == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $directory = Join-Path $env:RUNNER_TEMP 'verified-release'
+          $result = @(& ./scripts/verify-release.ps1 `
+              -Tag $env:RELEASE_TAG `
+              -Repository $env:GITHUB_REPOSITORY `
+              -OutputDirectory $directory)
+          if ($result.Count -ne 1) {
+              throw "Release verifier returned $($result.Count) output paths; expected one."
+          }
+
+          $version = $env:RELEASE_TAG.Substring(1)
+          $sbom = Join-Path $result[0] "conpty-oxide-$version.cdx.json"
+          if (-not (Test-Path -LiteralPath $sbom -PathType Leaf)) {
+              throw "Verified SBOM is missing at '$sbom'."
+          }
+          "sbom=$sbom" >> $env:GITHUB_OUTPUT
+
+      - name: Scan the verified release SBOM
+        id: grype
+        if: steps.release.outputs.exists == 'true'
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
+        with:
+          sbom: ${{ steps.verify.outputs.sbom }}
+          grype-version: 0.116.1
+          output-format: sarif
+          severity-cutoff: high
+          fail-build: true
+
+      - name: Upload Grype results to Code Scanning
+        if: >-
+          always() &&
+          steps.release.outputs.exists == 'true' &&
+          steps.grype.outputs.sarif != ''
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4.37.3
+        with:
+          sarif_file: ${{ steps.grype.outputs.sarif }}
+          category: release-sbom/grype

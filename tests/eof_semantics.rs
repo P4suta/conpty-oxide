@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The end-of-file contract.
 //!
 //! This is the promise the crate exists to make: a reader that keeps reading
@@ -14,14 +18,15 @@
 
 #![cfg(all(windows, feature = "blocking"))]
 
-mod helpers;
+pub mod helpers;
 
 use std::io::Read;
 use std::time::{Duration, Instant};
 
-use conpty_oxide::blocking::{Command, Pty};
+use conpty_oxide::blocking::Command;
 
-use helpers::{legacy_pty, pty, strip_escapes, with_timeout, Session};
+use helpers::sync::Session;
+use helpers::{strip_escapes, with_timeout};
 
 /// Per-test budget; the legacy shutdown path spends about a second draining
 /// before it closes, everything else is milliseconds.
@@ -30,18 +35,20 @@ const BUDGET: Duration = Duration::from_secs(30);
 /// The bound `wait` is expected to respect for a child that exits at once.
 const WAIT_BUDGET: Duration = Duration::from_secs(2);
 
-/// The body of the read-past-exit test, shared by the natural-mode and the
-/// forced-legacy variants: only where end-of-file comes from differs (a
-/// released console host exiting on its own versus the legacy watcher's
-/// close), the observable contract must not.
-fn reading_past_the_child_exit_reaches_eof_in(pty: Pty) {
+/// The body of the read-past-exit test. The CI matrix runs it against both
+/// lifecycle modes.
+fn reading_past_the_child_exit_reaches_eof_in() {
     const MARKER: &str = "conpty-oxide-eof-marker";
 
-    let mut child = Command::new("cmd.exe")
+    let parts = Command::new("cmd.exe")
         .args(["/c", "echo", MARKER])
-        .spawn(&pty)
-        .expect("spawning must succeed");
-    let (mut reader, writer, controller) = pty.into_split();
+        .spawn()
+        .expect("spawning must succeed")
+        .into_parts();
+    let mut child = parts.child;
+    let mut reader = parts.output;
+    let writer = parts.input;
+    let controller = parts.controller;
 
     // `echo` writes far less than a pipe buffer, so the child can run to
     // completion with nobody reading. Waiting first is what makes this
@@ -86,14 +93,7 @@ fn reading_past_the_child_exit_reaches_eof_in(pty: Pty) {
 #[test]
 fn reading_past_the_child_exit_reaches_end_of_file() {
     with_timeout(BUDGET, || {
-        reading_past_the_child_exit_reaches_eof_in(pty());
-    });
-}
-
-#[test]
-fn reading_past_the_child_exit_reaches_end_of_file_on_the_forced_legacy_path() {
-    with_timeout(BUDGET, || {
-        reading_past_the_child_exit_reaches_eof_in(legacy_pty());
+        reading_past_the_child_exit_reaches_eof_in();
     });
 }
 
@@ -116,7 +116,8 @@ fn waiting_for_a_short_child_returns_promptly() {
              which is over the {WAIT_BUDGET:?} budget"
         );
 
-        session.finish();
+        let (_output, again) = session.finish();
+        assert_eq!(again, status, "the exit status must remain cached");
     });
 }
 

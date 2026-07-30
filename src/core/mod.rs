@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Internal building blocks shared by the blocking and async front ends.
 //!
 //! Nothing in this module tree is part of the public API. It holds the
@@ -8,7 +12,7 @@
 //! detection, and the session state and spawn order the two front ends share
 //! verbatim.
 //!
-//! # Why ConPTY only ever gets synchronous handles
+//! # Why `ConPTY` only ever gets synchronous handles
 //!
 //! `CreatePseudoConsole` documents `hInput` and `hOutput` as "restricted to
 //! synchronous I/O", i.e. handles that do not require an `OVERLAPPED`
@@ -17,15 +21,20 @@
 //! cannot service synchronous handles itself — tokio's named-pipe types
 //! require overlapped handles for I/O-completion-port registration — so it
 //! uses named-pipe pairs instead: the overlapped server ends stay with us,
-//! and the synchronous client ends go to ConPTY. Either way ConPTY sees only
+//! and the synchronous client ends go to `ConPTY`. Either way `ConPTY` sees only
 //! synchronous handles, which both old and new console hosts accept.
 
-pub(crate) mod job;
-pub(crate) mod pipes;
-pub(crate) mod proc;
-pub(crate) mod pseudocon;
-pub(crate) mod session;
-pub(crate) mod wait;
+#[cfg(any(feature = "blocking", feature = "tokio"))]
+pub(super) mod child;
+mod job;
+#[cfg(any(feature = "blocking", feature = "tokio"))]
+pub(super) mod options;
+pub(super) mod pipes;
+mod proc;
+pub(super) mod pseudocon;
+#[cfg(any(feature = "blocking", feature = "tokio"))]
+pub(super) mod session;
+pub(super) mod wait;
 
 use std::io;
 
@@ -45,7 +54,7 @@ use windows_sys::Win32::Foundation::{
 /// `ERROR_HANDLE_EOF` from reads to `Ok(0)`, so for the reader this catches
 /// the remaining teardown codes; listing all four keeps the contract
 /// independent of that implementation detail.
-pub(crate) fn is_disconnect_error(err: &io::Error) -> bool {
+pub(super) fn is_disconnect_error(err: &io::Error) -> bool {
     const DISCONNECTED: [u32; 4] = [
         ERROR_BROKEN_PIPE,
         ERROR_HANDLE_EOF,
@@ -55,7 +64,8 @@ pub(crate) fn is_disconnect_error(err: &io::Error) -> bool {
 
     let raw_matches = err
         .raw_os_error()
-        .is_some_and(|code| DISCONNECTED.iter().any(|&known| known as i32 == code));
+        .and_then(|code| u32::try_from(code).ok())
+        .is_some_and(|code| DISCONNECTED.contains(&code));
     raw_matches
         || matches!(
             err.kind(),
@@ -64,30 +74,5 @@ pub(crate) fn is_disconnect_error(err: &io::Error) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn disconnect_errors_are_recognized() {
-        assert!(is_disconnect_error(&io::Error::from_raw_os_error(
-            ERROR_BROKEN_PIPE as i32
-        )));
-        assert!(is_disconnect_error(&io::Error::from_raw_os_error(
-            ERROR_HANDLE_EOF as i32
-        )));
-        assert!(is_disconnect_error(&io::Error::from_raw_os_error(
-            ERROR_NO_DATA as i32
-        )));
-        assert!(is_disconnect_error(&io::Error::from_raw_os_error(
-            ERROR_PIPE_NOT_CONNECTED as i32
-        )));
-        assert!(is_disconnect_error(&io::Error::new(
-            io::ErrorKind::BrokenPipe,
-            "synthetic"
-        )));
-        assert!(!is_disconnect_error(&io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "synthetic"
-        )));
-    }
-}
+#[path = "mod_tests.rs"]
+mod tests;

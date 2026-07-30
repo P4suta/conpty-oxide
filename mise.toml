@@ -1,10 +1,34 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 [settings]
 cargo.binstall = true
+
+[env]
+# PowerShell modules are not installed by a mise backend. Keeping the version
+# here gives the bootstrap and CI recipes one shared, reviewable pin.
+PSSCRIPTANALYZER_VERSION = "1.25.0"
+# rustdoc JSON is nightly-only. Keep public API snapshots reproducible instead
+# of silently moving them with the nightly channel.
+PUBLIC_API_TOOLCHAIN = "nightly-2026-07-02"
 
 [tools]
 just = "1.57.0"
 lefthook = "2.1.10"
+"aqua:EmbarkStudios/cargo-deny" = "0.20.2"
+"aqua:koalaman/shellcheck" = "0.11.0"
+"aqua:rhysd/actionlint" = "1.7.12"
+"aqua:rvben/rumdl" = "0.2.43"
+"cargo:cargo-hack" = "0.6.45"
+"cargo:cargo-llvm-cov" = "0.8.7"
+"cargo:cargo-mutants" = "27.1.0"
 "cargo:cargo-nextest" = "0.9.140"
+"cargo:cargo-public-api" = "0.52.0"
+"cargo:cargo-shear" = "1.13.3"
 "cargo:typos-cli" = "1.48.0"
 "cargo:committed" = "1.1.11"
 "cargo:taplo-cli" = "0.10.0"
+"pipx:reuse" = { version = "6.2.0", extras = ["charset-normalizer"] }
+"pipx:yamllint" = "1.38.0"
+uv = "0.11.32"

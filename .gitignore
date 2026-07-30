@@ -1,3 +1,9 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 /target
 # Third-party binaries fetched by `just fetch-conpty`; never committed.
 /vendor
+/.rumdl_cache
+/.tools
+/mutants.out*

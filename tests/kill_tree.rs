@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Killing a session kills the whole process tree.
 //!
 //! `TerminateProcess` on the process this crate created would leave every
@@ -12,15 +16,14 @@
 
 #![cfg(all(windows, feature = "blocking"))]
 
-mod helpers;
+pub mod helpers;
 
 use std::time::Duration;
 
-use conpty_oxide::blocking::{Command, Pty};
+use conpty_oxide::blocking::Command;
 
-use helpers::{
-    legacy_pty, process_is_running, pty, wait_for_descendant, wait_until, with_timeout, Session,
-};
+use helpers::sync::Session;
+use helpers::{process_is_running, wait_for_descendant, wait_until, with_timeout};
 
 const BUDGET: Duration = Duration::from_secs(30);
 
@@ -49,11 +52,10 @@ fn assert_tree_terminated(root: u32, grandchild: u32) {
     );
 }
 
-/// The body of the kill test, shared by the natural-mode and the
-/// forced-legacy variants: after a kill, the tree must be gone *and* the
-/// session must still reach end-of-file, whichever shutdown path produces it.
-fn kill_terminates_the_whole_tree_in(pty: Pty) {
-    let mut session = Session::start_in(pty, Command::new(ROOT_EXE).args(NEVER_ENDING));
+/// After a kill, the tree must be gone and the session must reach EOF. The CI
+/// matrix runs this against both lifecycle modes.
+fn kill_terminates_the_whole_tree_in() {
+    let mut session = Session::start(Command::new(ROOT_EXE).args(NEVER_ENDING));
     let root = session.child.id();
     let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR);
 
@@ -66,27 +68,21 @@ fn kill_terminates_the_whole_tree_in(pty: Pty) {
 
     // The session must still reach end-of-file after a kill; joining the
     // collector inside `finish` is what proves it.
-    session.finish();
+    let (_output, again) = session.finish();
+    assert_eq!(again, status, "the exit status must remain cached");
 }
 
 #[test]
 fn kill_terminates_the_whole_tree() {
     with_timeout(BUDGET, || {
-        kill_terminates_the_whole_tree_in(pty());
+        kill_terminates_the_whole_tree_in();
     });
 }
 
 #[test]
-fn kill_terminates_the_whole_tree_on_the_forced_legacy_path() {
+fn dropping_a_managed_child_terminates_the_whole_tree() {
     with_timeout(BUDGET, || {
-        kill_terminates_the_whole_tree_in(legacy_pty());
-    });
-}
-
-#[test]
-fn dropping_a_kill_on_drop_child_terminates_the_whole_tree() {
-    with_timeout(BUDGET, || {
-        let session = Session::start(Command::new(ROOT_EXE).args(NEVER_ENDING).kill_on_drop(true));
+        let session = Session::start(Command::new(ROOT_EXE).args(NEVER_ENDING));
         let Session {
             child,
             output,
@@ -105,5 +101,39 @@ fn dropping_a_kill_on_drop_child_terminates_the_whole_tree() {
         output.join();
         drop(writer);
         drop(controller);
+    });
+}
+
+#[test]
+fn dropping_a_managed_session_terminates_the_whole_tree() {
+    with_timeout(BUDGET, || {
+        let session = Command::new(ROOT_EXE)
+            .args(NEVER_ENDING)
+            .spawn()
+            .expect("managed spawning must succeed");
+        let root = session.id();
+        let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR);
+
+        drop(session);
+        assert_tree_terminated(root, grandchild);
+    });
+}
+
+#[test]
+fn dropping_the_child_from_managed_parts_terminates_the_whole_tree() {
+    with_timeout(BUDGET, || {
+        let parts = Command::new(ROOT_EXE)
+            .args(NEVER_ENDING)
+            .spawn()
+            .expect("managed spawning must succeed")
+            .into_parts();
+        let root = parts.child.id();
+        let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR);
+
+        drop(parts.child);
+        assert_tree_terminated(root, grandchild);
+        drop(parts.output);
+        drop(parts.input);
+        drop(parts.controller);
     });
 }

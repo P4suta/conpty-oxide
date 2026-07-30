@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Process command builder and Windows command-line / environment-block
 //! construction.
 //!
@@ -12,7 +16,7 @@
 //!   (`library/std/src/sys/args/windows.rs`), which itself follows the rules
 //!   documented by Microsoft ("Parsing C++ command-line arguments") and
 //!   Raymond Chen's "What's up with the strange treatment of quotation marks
-//!   and backslashes by CommandLineToArgvW".
+//!   and backslashes by `CommandLineToArgvW`".
 //! - [`Command::build_environment_block`] produces the `lpEnvironment` block,
 //!   sorted case-insensitively as required by the `CreateProcessW`
 //!   documentation.
@@ -36,7 +40,7 @@ const SPACE: u16 = b' ' as u16;
 ///
 /// Regular arguments go through the MSVC CRT compatible quoting algorithm;
 /// raw arguments are appended verbatim (see [`Command::raw_arg`]).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum Arg {
     Regular(OsString),
     Raw(OsString),
@@ -44,7 +48,7 @@ enum Arg {
 
 /// A recorded environment modification, replayed over the inherited (or
 /// cleared) environment when the block is built.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum EnvOp {
     /// Set (or overwrite, case-insensitively) a variable.
     Set(OsString, OsString),
@@ -57,14 +61,14 @@ enum EnvOp {
 /// Mirrors the `std::process::Command` builder API. This type only records
 /// configuration; spawning is implemented by the blocking / async layers in a
 /// later phase.
-#[derive(Debug, Clone)]
-pub(crate) struct Command {
+#[derive(Debug)]
+pub(super) struct Command {
     program: OsString,
     args: Vec<Arg>,
     env_clear: bool,
     env_ops: Vec<EnvOp>,
     cwd: Option<PathBuf>,
-    creation_flags: u32,
+    #[cfg(all(test, any(feature = "blocking", feature = "tokio")))]
     kill_on_drop: bool,
 }
 
@@ -74,28 +78,28 @@ impl Command {
     /// Like `std::process::Command::new`, the program is not resolved or
     /// validated here; errors (embedded NUL, embedded `"`) surface when the
     /// command line is built.
-    pub(crate) fn new(program: impl AsRef<OsStr>) -> Self {
+    pub(super) fn new(program: impl AsRef<OsStr>) -> Self {
         Self {
             program: program.as_ref().to_os_string(),
             args: Vec::new(),
             env_clear: false,
             env_ops: Vec::new(),
             cwd: None,
-            creation_flags: 0,
+            #[cfg(all(test, any(feature = "blocking", feature = "tokio")))]
             kill_on_drop: false,
         }
     }
 
     /// Appends one argument, to be quoted/escaped as needed when the command
     /// line is built.
-    pub(crate) fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+    pub(super) fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
         self.args.push(Arg::Regular(arg.as_ref().to_os_string()));
         self
     }
 
     /// Appends multiple arguments; equivalent to calling [`Command::arg`] for
     /// each element.
-    pub(crate) fn args<I, S>(&mut self, args: I) -> &mut Self
+    pub(super) fn args<I, S>(&mut self, args: I) -> &mut Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -113,14 +117,14 @@ impl Command {
     /// text is separated from the previous argument by a single space and
     /// otherwise copied verbatim. Intended for `cmd.exe /c` style invocations
     /// where the callee parses the raw command line itself.
-    pub(crate) fn raw_arg(&mut self, text: impl AsRef<OsStr>) -> &mut Self {
+    pub(super) fn raw_arg(&mut self, text: impl AsRef<OsStr>) -> &mut Self {
         self.args.push(Arg::Raw(text.as_ref().to_os_string()));
         self
     }
 
     /// Sets (or overwrites, case-insensitively) an environment variable for
     /// the child process.
-    pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+    pub(super) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
         self.env_ops.push(EnvOp::Set(
             key.as_ref().to_os_string(),
             value.as_ref().to_os_string(),
@@ -130,7 +134,7 @@ impl Command {
 
     /// Sets multiple environment variables; equivalent to calling
     /// [`Command::env`] for each pair.
-    pub(crate) fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
+    pub(super) fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<OsStr>,
@@ -144,7 +148,7 @@ impl Command {
 
     /// Removes an environment variable (case-insensitively) from the child
     /// process environment.
-    pub(crate) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+    pub(super) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
         self.env_ops
             .push(EnvOp::Remove(key.as_ref().to_os_string()));
         self
@@ -153,52 +157,40 @@ impl Command {
     /// Clears the entire environment for the child process, including any
     /// modifications recorded so far. Variables set after this call still
     /// apply.
-    pub(crate) fn env_clear(&mut self) -> &mut Self {
+    pub(super) fn env_clear(&mut self) -> &mut Self {
         self.env_clear = true;
         self.env_ops.clear();
         self
     }
 
     /// Sets the working directory for the child process.
-    pub(crate) fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
+    pub(super) fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
         self.cwd = Some(dir.as_ref().to_path_buf());
-        self
-    }
-
-    /// Sets extra process creation flags, OR'ed into the `dwCreationFlags`
-    /// that the crate always passes to `CreateProcessW` (such as
-    /// `EXTENDED_STARTUPINFO_PRESENT`). Same semantics as
-    /// `std::os::windows::process::CommandExt::creation_flags`.
-    pub(crate) fn creation_flags(&mut self, flags: u32) -> &mut Self {
-        self.creation_flags = flags;
         self
     }
 
     /// Requests that the spawned process (tree) be terminated when its handle
     /// is dropped. Only recorded here; enforced by the spawn layers.
-    pub(crate) fn kill_on_drop(&mut self, kill: bool) -> &mut Self {
+    #[cfg(all(test, any(feature = "blocking", feature = "tokio")))]
+    pub(super) fn kill_on_drop(&mut self, kill: bool) -> &mut Self {
         self.kill_on_drop = kill;
         self
     }
 
     /// Returns the program name passed to [`Command::new`].
-    pub(crate) fn get_program(&self) -> &OsStr {
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    pub(super) fn get_program(&self) -> &OsStr {
         &self.program
     }
 
     /// Returns the configured working directory, if any.
-    pub(crate) fn get_current_dir(&self) -> Option<&Path> {
+    pub(super) fn get_current_dir(&self) -> Option<&Path> {
         self.cwd.as_deref()
     }
 
-    /// Returns the extra creation flags configured via
-    /// [`Command::creation_flags`].
-    pub(crate) fn get_creation_flags(&self) -> u32 {
-        self.creation_flags
-    }
-
     /// Returns whether kill-on-drop was requested.
-    pub(crate) fn get_kill_on_drop(&self) -> bool {
+    #[cfg(all(test, any(feature = "blocking", feature = "tokio")))]
+    pub(super) const fn get_kill_on_drop(&self) -> bool {
         self.kill_on_drop
     }
 
@@ -219,7 +211,7 @@ impl Command {
     ///
     /// Raw arguments are appended verbatim. Any embedded NUL (in the program
     /// or any argument) yields an [`io::ErrorKind::InvalidInput`] error.
-    pub(crate) fn build_command_line(&self) -> io::Result<Vec<u16>> {
+    pub(super) fn build_command_line(&self) -> io::Result<Vec<u16>> {
         ensure_no_nuls(&self.program)?;
         if self.program.as_encoded_bytes().contains(&b'"') {
             return Err(invalid_input(
@@ -237,7 +229,7 @@ impl Command {
                 Arg::Raw(text) => {
                     ensure_no_nuls(text)?;
                     cmd.extend(text.encode_wide());
-                }
+                },
             }
         }
         cmd.push(0);
@@ -261,7 +253,7 @@ impl Command {
     ///
     /// Errors with [`io::ErrorKind::InvalidInput`] if a recorded name is
     /// empty, contains `=`, or if a name or value contains NUL.
-    pub(crate) fn build_environment_block(&self) -> io::Result<Option<Vec<u16>>> {
+    pub(super) fn build_environment_block(&self) -> io::Result<Option<Vec<u16>>> {
         if !self.env_clear && self.env_ops.is_empty() {
             return Ok(None);
         }
@@ -284,23 +276,23 @@ impl Command {
                         // Overwriting keeps the casing of the existing name,
                         // matching `BTreeMap::insert` semantics in std's
                         // `CommandEnv`.
-                        Entry::Occupied(mut entry) => entry.get_mut().1 = value.clone(),
+                        Entry::Occupied(mut entry) => entry.get_mut().1.clone_from(value),
                         Entry::Vacant(entry) => {
                             entry.insert((key.clone(), value.clone()));
-                        }
+                        },
                     }
-                }
+                },
                 EnvOp::Remove(key) => {
                     validate_env_key(key)?;
                     map.remove(&upcased_wide(key));
-                }
+                },
             }
         }
 
         let mut block: Vec<u16> = Vec::new();
         for (key, value) in map.values() {
             block.extend(key.encode_wide());
-            block.push(b'=' as u16);
+            block.push(u16::from(b'='));
             block.extend(value.encode_wide());
             block.push(0);
         }
@@ -317,7 +309,7 @@ impl Command {
 /// Converts an `OsStr` to a NUL-terminated UTF-16 buffer, rejecting embedded
 /// NULs with [`io::ErrorKind::InvalidInput`]. Used for `lpCurrentDirectory`
 /// and similar wide-string parameters.
-pub(crate) fn to_wide_nul(s: &OsStr) -> io::Result<Vec<u16>> {
+pub(super) fn to_wide_nul(s: &OsStr) -> io::Result<Vec<u16>> {
     ensure_no_nuls(s)?;
     let mut wide: Vec<u16> = s.encode_wide().collect();
     wide.push(0);
@@ -392,16 +384,13 @@ fn append_regular_arg(cmd: &mut Vec<u16>, arg: &OsStr) -> io::Result<()> {
 /// mappings) is left unchanged. Exact for ASCII, which covers virtually all
 /// real environment variable names.
 fn upcase_unit(unit: u16) -> u16 {
-    match char::from_u32(u32::from(unit)) {
-        Some(c) => {
-            let mut upper = c.to_uppercase();
-            match (upper.next(), upper.next()) {
-                (Some(up), None) if (up as u32) <= u32::from(u16::MAX) => up as u16,
-                _ => unit,
-            }
+    char::from_u32(u32::from(unit)).map_or(unit, |c| {
+        let mut upper = c.to_uppercase();
+        match (upper.next(), upper.next()) {
+            (Some(up), None) => u16::try_from(u32::from(up)).unwrap_or(unit),
+            _ => unit,
         }
-        None => unit,
-    }
+    })
 }
 
 fn upcased_wide(s: &OsStr) -> Vec<u16> {
@@ -409,312 +398,5 @@ fn upcased_wide(s: &OsStr) -> Vec<u16> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Builds the command line and returns it as a `String`, asserting the
-    /// trailing NUL along the way.
-    fn cmdline(cmd: &Command) -> String {
-        let wide = cmd.build_command_line().expect("build_command_line failed");
-        assert_eq!(wide.last(), Some(&0), "command line must be NUL-terminated");
-        String::from_utf16(&wide[..wide.len() - 1]).expect("command line is not valid UTF-16")
-    }
-
-    /// Parses an environment block back into (name, value) pairs, asserting
-    /// the double-NUL terminator.
-    fn parse_env_block(block: &[u16]) -> Vec<(String, String)> {
-        assert!(block.len() >= 2, "block too short: {block:?}");
-        assert_eq!(
-            &block[block.len() - 2..],
-            &[0, 0],
-            "block must end with two NULs"
-        );
-        let mut pairs = Vec::new();
-        let mut rest = &block[..block.len() - 1];
-        while !rest.is_empty() {
-            let end = rest.iter().position(|&u| u == 0).expect("missing NUL");
-            if end == 0 {
-                // Leading NUL of the empty-environment representation.
-                break;
-            }
-            let entry = String::from_utf16(&rest[..end]).expect("entry is not valid UTF-16");
-            let eq = entry.find('=').expect("entry has no `=`");
-            pairs.push((entry[..eq].to_string(), entry[eq + 1..].to_string()));
-            rest = &rest[end + 1..];
-        }
-        pairs
-    }
-
-    #[test]
-    fn cmdline_quoting_table() {
-        // Expected values follow Rust std's MSVC CRT compatible algorithm
-        // (library/std/src/sys/args/windows.rs) and the CRT parsing rules
-        // documented by Microsoft and Raymond Chen, except that `|` also
-        // forces quoting (a deliberate, parse-neutral hardening).
-        struct Case {
-            name: &'static str,
-            arg: &'static str,
-            expected: &'static str,
-        }
-        let cases = [
-            Case {
-                name: "empty argument is quoted",
-                arg: "",
-                expected: r#""""#,
-            },
-            Case {
-                name: "plain argument is unquoted",
-                arg: "hello",
-                expected: "hello",
-            },
-            Case {
-                name: "space forces quoting",
-                arg: "hello world",
-                expected: r#""hello world""#,
-            },
-            Case {
-                name: "tab forces quoting",
-                arg: "a\tb",
-                expected: "\"a\tb\"",
-            },
-            Case {
-                name: "inner quotes are backslash-escaped",
-                arg: r#"he said "hi""#,
-                expected: r#""he said \"hi\"""#,
-            },
-            Case {
-                name: "one backslash before quote doubles to 2n+1",
-                arg: r#"a\"b"#,
-                expected: r#""a\\\"b""#,
-            },
-            Case {
-                name: "two backslashes before quote double to 2n+1",
-                arg: r#"a\\"b"#,
-                expected: r#""a\\\\\"b""#,
-            },
-            Case {
-                name: "trailing backslash doubles inside quotes",
-                arg: r"C:\dir with space\",
-                expected: r#""C:\dir with space\\""#,
-            },
-            Case {
-                name: "trailing backslash unquoted passes through",
-                arg: r"C:\dir\",
-                expected: r"C:\dir\",
-            },
-            Case {
-                name: "inner backslashes not before a quote are untouched",
-                arg: r"C:\a b\c",
-                expected: r#""C:\a b\c""#,
-            },
-            Case {
-                name: "non-ascii with ascii space is quoted",
-                arg: "こんにちは 世界",
-                expected: "\"こんにちは 世界\"",
-            },
-            Case {
-                name: "non-ascii without triggers is unquoted",
-                arg: "日本語",
-                expected: "日本語",
-            },
-            Case {
-                name: "ideographic space does not force quoting",
-                arg: "日\u{3000}本",
-                expected: "日\u{3000}本",
-            },
-            Case {
-                name: "vertical bar forces quoting",
-                arg: "a|b",
-                expected: r#""a|b""#,
-            },
-        ];
-        for case in &cases {
-            let mut cmd = Command::new("prog");
-            cmd.arg(case.arg);
-            assert_eq!(
-                cmdline(&cmd),
-                format!("\"prog\" {}", case.expected),
-                "case: {}",
-                case.name
-            );
-        }
-    }
-
-    #[test]
-    fn cmdline_program_is_always_quoted() {
-        let cmd = Command::new(r"C:\Program Files\app.exe");
-        assert_eq!(cmdline(&cmd), r#""C:\Program Files\app.exe""#);
-    }
-
-    #[test]
-    fn cmdline_raw_arg_passes_through_verbatim() {
-        let mut cmd = Command::new(r"C:\Windows\System32\cmd.exe");
-        cmd.raw_arg(r#"/c "echo he said \"hi\"" | more"#);
-        assert_eq!(
-            cmdline(&cmd),
-            r#""C:\Windows\System32\cmd.exe" /c "echo he said \"hi\"" | more"#
-        );
-    }
-
-    #[test]
-    fn cmdline_mixes_regular_and_raw_args_in_order() {
-        let mut cmd = Command::new("prog");
-        cmd.args(["one", "two words"]).raw_arg("three|raw").arg("");
-        assert_eq!(cmdline(&cmd), r#""prog" one "two words" three|raw """#);
-    }
-
-    #[test]
-    fn cmdline_rejects_nul_everywhere() {
-        let kind = |cmd: &Command| cmd.build_command_line().unwrap_err().kind();
-
-        let cmd = Command::new("pro\0g");
-        assert_eq!(kind(&cmd), io::ErrorKind::InvalidInput);
-
-        let mut cmd = Command::new("prog");
-        cmd.arg("a\0b");
-        assert_eq!(kind(&cmd), io::ErrorKind::InvalidInput);
-
-        let mut cmd = Command::new("prog");
-        cmd.raw_arg("a\0b");
-        assert_eq!(kind(&cmd), io::ErrorKind::InvalidInput);
-    }
-
-    #[test]
-    fn cmdline_rejects_quote_in_program() {
-        let cmd = Command::new(r#"pro"g"#);
-        let err = cmd.build_command_line().unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-    }
-
-    #[test]
-    fn env_no_changes_returns_none() {
-        let mut cmd = Command::new("prog");
-        cmd.arg("x").current_dir(r"C:\").creation_flags(0x0800_0000);
-        assert!(cmd.build_environment_block().unwrap().is_none());
-    }
-
-    #[test]
-    fn env_inherits_parent_and_sorts_case_insensitively() {
-        let mut cmd = Command::new("prog");
-        cmd.env("CONPTY_OXIDE_TEST_INHERIT", "value1");
-        let block = cmd.build_environment_block().unwrap().unwrap();
-        let pairs = parse_env_block(&block);
-        assert!(
-            pairs
-                .iter()
-                .any(|(k, v)| k == "CONPTY_OXIDE_TEST_INHERIT" && v == "value1"),
-            "override missing from block"
-        );
-        assert!(pairs.len() > 1, "parent environment was not inherited");
-        // Strictly increasing by uppercased UTF-16 units: sorted and deduped.
-        let upcased: Vec<Vec<u16>> = pairs
-            .iter()
-            .map(|(k, _)| upcased_wide(OsStr::new(k)))
-            .collect();
-        assert!(
-            upcased.windows(2).all(|w| w[0] < w[1]),
-            "block is not sorted case-insensitively: {pairs:?}"
-        );
-    }
-
-    #[test]
-    fn env_clear_alone_yields_empty_double_nul_block() {
-        let mut cmd = Command::new("prog");
-        cmd.env_clear();
-        let block = cmd.build_environment_block().unwrap().unwrap();
-        assert_eq!(block, vec![0, 0]);
-        assert!(parse_env_block(&block).is_empty());
-    }
-
-    #[test]
-    fn env_clear_then_set_sorts_case_insensitively() {
-        let mut cmd = Command::new("prog");
-        cmd.env_clear().envs([("b", "2"), ("A", "1"), ("C", "3")]);
-        let block = cmd.build_environment_block().unwrap().unwrap();
-        let pairs = parse_env_block(&block);
-        // "b" sorts between "A" and "C" because comparison is done on
-        // uppercased units; a case-sensitive sort would put it last.
-        assert_eq!(
-            pairs,
-            vec![
-                ("A".to_string(), "1".to_string()),
-                ("b".to_string(), "2".to_string()),
-                ("C".to_string(), "3".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn env_override_is_case_insensitive_and_keeps_first_casing() {
-        let mut cmd = Command::new("prog");
-        cmd.env_clear().env("FOO", "1").env("foo", "2");
-        let block = cmd.build_environment_block().unwrap().unwrap();
-        assert_eq!(
-            parse_env_block(&block),
-            vec![("FOO".to_string(), "2".to_string())]
-        );
-    }
-
-    #[test]
-    fn env_remove_is_case_insensitive() {
-        let mut cmd = Command::new("prog");
-        cmd.env_clear()
-            .env("FOO", "1")
-            .env("BAR", "2")
-            .env_remove("foo");
-        let block = cmd.build_environment_block().unwrap().unwrap();
-        assert_eq!(
-            parse_env_block(&block),
-            vec![("BAR".to_string(), "2".to_string())]
-        );
-    }
-
-    #[test]
-    fn env_set_after_remove_reinstates_variable() {
-        let mut cmd = Command::new("prog");
-        cmd.env_clear().env("A", "1").env_remove("a").env("a", "2");
-        let block = cmd.build_environment_block().unwrap().unwrap();
-        assert_eq!(
-            parse_env_block(&block),
-            vec![("a".to_string(), "2".to_string())]
-        );
-    }
-
-    #[test]
-    fn env_rejects_invalid_names_and_nuls() {
-        let kind = |cmd: &Command| cmd.build_environment_block().unwrap_err().kind();
-
-        let mut cmd = Command::new("prog");
-        cmd.env("BAD=KEY", "v");
-        assert_eq!(kind(&cmd), io::ErrorKind::InvalidInput);
-
-        let mut cmd = Command::new("prog");
-        cmd.env("", "v");
-        assert_eq!(kind(&cmd), io::ErrorKind::InvalidInput);
-
-        let mut cmd = Command::new("prog");
-        cmd.env("A\0B", "v");
-        assert_eq!(kind(&cmd), io::ErrorKind::InvalidInput);
-
-        let mut cmd = Command::new("prog");
-        cmd.env("KEY", "va\0lue");
-        assert_eq!(kind(&cmd), io::ErrorKind::InvalidInput);
-
-        let mut cmd = Command::new("prog");
-        cmd.env_remove("BAD=KEY");
-        assert_eq!(kind(&cmd), io::ErrorKind::InvalidInput);
-    }
-
-    #[test]
-    fn to_wide_nul_appends_terminator() {
-        let wide = to_wide_nul(OsStr::new("C:\\dir")).unwrap();
-        let expected: Vec<u16> = "C:\\dir".encode_utf16().chain(Some(0)).collect();
-        assert_eq!(wide, expected);
-    }
-
-    #[test]
-    fn to_wide_nul_rejects_embedded_nul() {
-        let err = to_wide_nul(OsStr::new("a\0b")).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-    }
-}
+#[path = "command_tests.rs"]
+mod tests;

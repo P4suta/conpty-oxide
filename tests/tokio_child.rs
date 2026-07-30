@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Waiting for, cancelling, and killing an async child.
 //!
 //! Two promises are tested here, and both are invisible until they break.
@@ -19,13 +23,13 @@
 
 #![cfg(all(windows, feature = "tokio"))]
 
-mod helpers;
+pub mod helpers;
 
 use std::time::Duration;
 
-use conpty_oxide::{Command, Pty};
+use conpty_oxide::tokio::Command;
 
-use helpers::asyn::{legacy_pty, poll_until, pty, wait_for_descendant, within, Session};
+use helpers::tokio_support::{poll_until, wait_for_descendant, within, Session};
 use helpers::{process_is_running, watchdog};
 
 /// Outer guard. Only a genuine deadlock gets anywhere near this.
@@ -68,8 +72,8 @@ async fn assert_tree_terminated(root: u32, grandchild: u32) {
 /// The body of the kill test, shared by both lifecycle modes: after a kill the
 /// tree must be gone *and* the session must still reach end-of-file, whichever
 /// shutdown path produces it.
-async fn kill_terminates_the_whole_tree_in(pty: Pty) {
-    let mut session = Session::start_in(pty, Command::new(ROOT_EXE).args(NEVER_ENDING));
+async fn kill_terminates_the_whole_tree_in() {
+    let mut session = Session::start(Command::new(ROOT_EXE).args(NEVER_ENDING));
     let root = session.child.id();
     assert_ne!(root, 0, "a spawned child must have a pid");
     let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR).await;
@@ -104,33 +108,19 @@ async fn kill_terminates_the_whole_tree_in(pty: Pty) {
 async fn kill_terminates_the_whole_tree() {
     let _watchdog = watchdog(BUDGET);
     within("kill_terminates_the_whole_tree", DEADLINE, async {
-        kill_terminates_the_whole_tree_in(pty()).await;
+        kill_terminates_the_whole_tree_in().await;
     })
     .await;
 }
 
 #[tokio::test]
-async fn kill_terminates_the_whole_tree_on_the_forced_legacy_path() {
-    let _watchdog = watchdog(BUDGET);
-    within(
-        "kill_terminates_the_whole_tree_on_the_forced_legacy_path",
-        DEADLINE,
-        async {
-            kill_terminates_the_whole_tree_in(legacy_pty()).await;
-        },
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn dropping_a_kill_on_drop_child_terminates_the_whole_tree() {
+async fn dropping_a_managed_child_terminates_the_whole_tree() {
     let _watchdog = watchdog(BUDGET);
     within(
         "dropping_a_kill_on_drop_child_terminates_the_whole_tree",
         DEADLINE,
         async {
-            let session =
-                Session::start(Command::new(ROOT_EXE).args(NEVER_ENDING).kill_on_drop(true));
+            let session = Session::start(Command::new(ROOT_EXE).args(NEVER_ENDING));
             let Session {
                 child,
                 output,
@@ -151,6 +141,78 @@ async fn dropping_a_kill_on_drop_child_terminates_the_whole_tree() {
             drop(controller);
         },
     )
+    .await;
+}
+
+#[tokio::test]
+async fn dropping_a_managed_session_terminates_the_whole_tree() {
+    let _watchdog = watchdog(BUDGET);
+    within(
+        "dropping_a_managed_session_terminates_the_whole_tree",
+        DEADLINE,
+        async {
+            let session = Command::new(ROOT_EXE)
+                .args(NEVER_ENDING)
+                .spawn()
+                .expect("managed spawning must succeed");
+            let root = session.id();
+            let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR).await;
+
+            drop(session);
+            assert_tree_terminated(root, grandchild).await;
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn dropping_the_child_from_managed_parts_terminates_the_whole_tree() {
+    let _watchdog = watchdog(BUDGET);
+    within(
+        "dropping_the_child_from_managed_parts_terminates_the_whole_tree",
+        DEADLINE,
+        async {
+            let parts = Command::new(ROOT_EXE)
+                .args(NEVER_ENDING)
+                .spawn()
+                .expect("managed spawning must succeed")
+                .into_parts();
+            let root = parts.child.id();
+            let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR).await;
+
+            drop(parts.child);
+            assert_tree_terminated(root, grandchild).await;
+            drop(parts.output);
+            drop(parts.input);
+            drop(parts.controller);
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn cancelling_managed_output_collection_terminates_the_whole_tree() {
+    let _watchdog = watchdog(BUDGET);
+    Box::pin(within(
+        "cancelling_managed_output_collection_terminates_the_whole_tree",
+        DEADLINE,
+        async {
+            let session = Command::new(ROOT_EXE)
+                .args(NEVER_ENDING)
+                .spawn()
+                .expect("managed spawning must succeed");
+            let root = session.id();
+            let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR).await;
+
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), session.wait_with_output())
+                    .await
+                    .is_err(),
+                "the never-ending tree must still be collecting when cancelled"
+            );
+            assert_tree_terminated(root, grandchild).await;
+        },
+    ))
     .await;
 }
 
@@ -201,6 +263,58 @@ async fn a_cancelled_wait_still_reports_the_real_exit_status() {
 
             let (_output, again) = session.finish().await;
             assert_eq!(again, status, "the status must be cached, not re-read");
+        },
+    )
+    .await;
+}
+
+/// The Windows value `259` is also `STILL_ACTIVE`, and a high-bit status can
+/// be corrupted by an accidental signed conversion. Both must survive the
+/// registered-wait callback and the public cache verbatim.
+#[tokio::test]
+async fn registered_wait_preserves_sentinel_and_high_bit_exit_codes() {
+    let _watchdog = watchdog(BUDGET);
+    within(
+        "registered_wait_preserves_sentinel_and_high_bit_exit_codes",
+        DEADLINE,
+        async {
+            let (_output, sentinel) =
+                Session::start(Command::new(ROOT_EXE).args(["/c", "exit", "259"]))
+                    .finish()
+                    .await;
+            assert_eq!(sentinel.code(), 259);
+
+            let (_output, high_bit) =
+                Session::start(Command::new(ROOT_EXE).args(["/c", "exit", "-1073741510"]))
+                    .finish()
+                    .await;
+            assert_eq!(high_bit.code(), 0xC000_013A);
+        },
+    )
+    .await;
+}
+
+/// Registering a wait after the process is already signaled must complete
+/// immediately; the callback may run during registration on this path.
+#[tokio::test]
+async fn wait_registered_after_exit_reports_the_cached_os_status() {
+    let _watchdog = watchdog(BUDGET);
+    within(
+        "wait_registered_after_exit_reports_the_cached_os_status",
+        DEADLINE,
+        async {
+            let mut session = Session::start(Command::new(ROOT_EXE).args(["/c", "exit", "37"]));
+            tokio::time::sleep(Duration::from_millis(300)).await;
+
+            let status = session
+                .child
+                .wait()
+                .await
+                .expect("waiting on an already-signaled process must succeed");
+            assert_eq!(status.code(), 37);
+
+            let (_output, again) = session.finish().await;
+            assert_eq!(again, status, "the status must remain cached");
         },
     )
     .await;

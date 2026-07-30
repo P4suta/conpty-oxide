@@ -1,0 +1,321 @@
+﻿pub mod conpty_oxide
+pub mod conpty_oxide::tokio
+pub struct conpty_oxide::tokio::Child
+impl conpty_oxide::tokio::Child
+pub const fn conpty_oxide::tokio::Child::id(&self) -> u32
+pub fn conpty_oxide::tokio::Child::kill(&mut self) -> conpty_oxide::Result<()>
+pub fn conpty_oxide::tokio::Child::try_wait(&mut self) -> conpty_oxide::Result<core::option::Option<conpty_oxide::ExitStatus>>
+pub async fn conpty_oxide::tokio::Child::wait(&mut self) -> conpty_oxide::Result<conpty_oxide::ExitStatus>
+impl core::fmt::Debug for conpty_oxide::tokio::Child
+pub fn conpty_oxide::tokio::Child::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl std::os::windows::io::handle::AsHandle for conpty_oxide::tokio::Child
+pub fn conpty_oxide::tokio::Child::as_handle(&self) -> std::os::windows::io::handle::BorrowedHandle<'_>
+impl core::marker::Freeze for conpty_oxide::tokio::Child
+impl core::marker::Send for conpty_oxide::tokio::Child
+impl core::marker::Sync for conpty_oxide::tokio::Child
+impl core::marker::Unpin for conpty_oxide::tokio::Child
+impl core::marker::UnsafeUnpin for conpty_oxide::tokio::Child
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::tokio::Child
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::tokio::Child
+pub struct conpty_oxide::tokio::Command
+impl conpty_oxide::tokio::Command
+pub fn conpty_oxide::tokio::Command::arg(&mut self, impl core::convert::AsRef<std::ffi::os_str::OsStr>) -> &mut Self
+pub fn conpty_oxide::tokio::Command::args<I, S>(&mut self, I) -> &mut Self where I: core::iter::traits::collect::IntoIterator<Item = S>, S: core::convert::AsRef<std::ffi::os_str::OsStr>
+pub fn conpty_oxide::tokio::Command::current_dir(&mut self, impl core::convert::AsRef<std::path::Path>) -> &mut Self
+pub fn conpty_oxide::tokio::Command::env(&mut self, impl core::convert::AsRef<std::ffi::os_str::OsStr>, impl core::convert::AsRef<std::ffi::os_str::OsStr>) -> &mut Self
+pub fn conpty_oxide::tokio::Command::env_clear(&mut self) -> &mut Self
+pub fn conpty_oxide::tokio::Command::env_remove(&mut self, impl core::convert::AsRef<std::ffi::os_str::OsStr>) -> &mut Self
+pub fn conpty_oxide::tokio::Command::envs<I, K, V>(&mut self, I) -> &mut Self where I: core::iter::traits::collect::IntoIterator<Item = (K, V)>, K: core::convert::AsRef<std::ffi::os_str::OsStr>, V: core::convert::AsRef<std::ffi::os_str::OsStr>
+pub fn conpty_oxide::tokio::Command::new(impl core::convert::AsRef<std::ffi::os_str::OsStr>) -> Self
+pub async fn conpty_oxide::tokio::Command::output(&mut self) -> conpty_oxide::Result<conpty_oxide::SessionOutput>
+pub fn conpty_oxide::tokio::Command::raw_arg(&mut self, impl core::convert::AsRef<std::ffi::os_str::OsStr>) -> &mut Self
+pub fn conpty_oxide::tokio::Command::spawn(&mut self) -> conpty_oxide::Result<conpty_oxide::tokio::Session>
+pub fn conpty_oxide::tokio::Command::spawn_with(&mut self, conpty_oxide::SessionOptions) -> conpty_oxide::Result<conpty_oxide::tokio::Session>
+impl core::fmt::Debug for conpty_oxide::tokio::Command
+pub fn conpty_oxide::tokio::Command::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::tokio::Command
+impl core::marker::Send for conpty_oxide::tokio::Command
+impl core::marker::Sync for conpty_oxide::tokio::Command
+impl core::marker::Unpin for conpty_oxide::tokio::Command
+impl core::marker::UnsafeUnpin for conpty_oxide::tokio::Command
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::tokio::Command
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::tokio::Command
+pub struct conpty_oxide::tokio::OwnedReadHalf
+impl core::fmt::Debug for conpty_oxide::tokio::OwnedReadHalf
+pub fn conpty_oxide::tokio::OwnedReadHalf::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl tokio::io::async_read::AsyncRead for conpty_oxide::tokio::OwnedReadHalf
+pub fn conpty_oxide::tokio::OwnedReadHalf::poll_read(core::pin::Pin<&mut Self>, &mut core::task::wake::Context<'_>, &mut tokio::io::read_buf::ReadBuf<'_>) -> core::task::poll::Poll<core::io::error::Result<()>>
+impl core::marker::Freeze for conpty_oxide::tokio::OwnedReadHalf
+impl core::marker::Send for conpty_oxide::tokio::OwnedReadHalf
+impl core::marker::Sync for conpty_oxide::tokio::OwnedReadHalf
+impl core::marker::Unpin for conpty_oxide::tokio::OwnedReadHalf
+impl core::marker::UnsafeUnpin for conpty_oxide::tokio::OwnedReadHalf
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::tokio::OwnedReadHalf
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::tokio::OwnedReadHalf
+pub struct conpty_oxide::tokio::OwnedWriteHalf
+impl core::fmt::Debug for conpty_oxide::tokio::OwnedWriteHalf
+pub fn conpty_oxide::tokio::OwnedWriteHalf::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl tokio::io::async_write::AsyncWrite for conpty_oxide::tokio::OwnedWriteHalf
+pub fn conpty_oxide::tokio::OwnedWriteHalf::poll_flush(core::pin::Pin<&mut Self>, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::io::error::Result<()>>
+pub fn conpty_oxide::tokio::OwnedWriteHalf::poll_shutdown(core::pin::Pin<&mut Self>, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::io::error::Result<()>>
+pub fn conpty_oxide::tokio::OwnedWriteHalf::poll_write(core::pin::Pin<&mut Self>, &mut core::task::wake::Context<'_>, &[u8]) -> core::task::poll::Poll<core::io::error::Result<usize>>
+impl core::marker::Freeze for conpty_oxide::tokio::OwnedWriteHalf
+impl core::marker::Send for conpty_oxide::tokio::OwnedWriteHalf
+impl core::marker::Sync for conpty_oxide::tokio::OwnedWriteHalf
+impl core::marker::Unpin for conpty_oxide::tokio::OwnedWriteHalf
+impl core::marker::UnsafeUnpin for conpty_oxide::tokio::OwnedWriteHalf
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::tokio::OwnedWriteHalf
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::tokio::OwnedWriteHalf
+pub struct conpty_oxide::tokio::Session
+impl conpty_oxide::tokio::Session
+pub fn conpty_oxide::tokio::Session::clear(&self) -> conpty_oxide::Result<()>
+pub const fn conpty_oxide::tokio::Session::id(&self) -> u32
+pub fn conpty_oxide::tokio::Session::into_parts(self) -> conpty_oxide::tokio::SessionParts
+pub fn conpty_oxide::tokio::Session::kill(&mut self) -> conpty_oxide::Result<()>
+pub fn conpty_oxide::tokio::Session::resize(&self, conpty_oxide::Size) -> conpty_oxide::Result<()>
+pub fn conpty_oxide::tokio::Session::size(&self) -> conpty_oxide::Size
+pub fn conpty_oxide::tokio::Session::supports_clear(&self) -> bool
+pub fn conpty_oxide::tokio::Session::try_wait(&mut self) -> conpty_oxide::Result<core::option::Option<conpty_oxide::ExitStatus>>
+pub async fn conpty_oxide::tokio::Session::wait_with_output(self) -> conpty_oxide::Result<conpty_oxide::SessionOutput>
+impl core::fmt::Debug for conpty_oxide::tokio::Session
+pub fn conpty_oxide::tokio::Session::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl tokio::io::async_read::AsyncRead for conpty_oxide::tokio::Session
+pub fn conpty_oxide::tokio::Session::poll_read(core::pin::Pin<&mut Self>, &mut core::task::wake::Context<'_>, &mut tokio::io::read_buf::ReadBuf<'_>) -> core::task::poll::Poll<core::io::error::Result<()>>
+impl tokio::io::async_write::AsyncWrite for conpty_oxide::tokio::Session
+pub fn conpty_oxide::tokio::Session::poll_flush(core::pin::Pin<&mut Self>, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::io::error::Result<()>>
+pub fn conpty_oxide::tokio::Session::poll_shutdown(core::pin::Pin<&mut Self>, &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<core::io::error::Result<()>>
+pub fn conpty_oxide::tokio::Session::poll_write(core::pin::Pin<&mut Self>, &mut core::task::wake::Context<'_>, &[u8]) -> core::task::poll::Poll<core::io::error::Result<usize>>
+impl core::marker::Freeze for conpty_oxide::tokio::Session
+impl core::marker::Send for conpty_oxide::tokio::Session
+impl core::marker::Sync for conpty_oxide::tokio::Session
+impl core::marker::Unpin for conpty_oxide::tokio::Session
+impl core::marker::UnsafeUnpin for conpty_oxide::tokio::Session
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::tokio::Session
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::tokio::Session
+#[non_exhaustive] pub struct conpty_oxide::tokio::SessionParts
+pub conpty_oxide::tokio::SessionParts::child: conpty_oxide::tokio::Child
+pub conpty_oxide::tokio::SessionParts::controller: conpty_oxide::PtyController
+pub conpty_oxide::tokio::SessionParts::input: conpty_oxide::tokio::OwnedWriteHalf
+pub conpty_oxide::tokio::SessionParts::output: conpty_oxide::tokio::OwnedReadHalf
+impl core::fmt::Debug for conpty_oxide::tokio::SessionParts
+pub fn conpty_oxide::tokio::SessionParts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::tokio::SessionParts
+impl core::marker::Send for conpty_oxide::tokio::SessionParts
+impl core::marker::Sync for conpty_oxide::tokio::SessionParts
+impl core::marker::Unpin for conpty_oxide::tokio::SessionParts
+impl core::marker::UnsafeUnpin for conpty_oxide::tokio::SessionParts
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::tokio::SessionParts
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::tokio::SessionParts
+#[non_exhaustive] pub enum conpty_oxide::BackendErrorKind
+pub conpty_oxide::BackendErrorKind::DllNotFound
+pub conpty_oxide::BackendErrorKind::MissingExport
+pub conpty_oxide::BackendErrorKind::OpenConsoleMissing
+pub conpty_oxide::BackendErrorKind::Unsupported
+pub conpty_oxide::BackendErrorKind::VersionMismatch
+impl core::clone::Clone for conpty_oxide::BackendErrorKind
+pub fn conpty_oxide::BackendErrorKind::clone(&self) -> conpty_oxide::BackendErrorKind
+impl core::cmp::Eq for conpty_oxide::BackendErrorKind
+impl core::cmp::PartialEq for conpty_oxide::BackendErrorKind
+pub fn conpty_oxide::BackendErrorKind::eq(&self, &conpty_oxide::BackendErrorKind) -> bool
+impl core::fmt::Debug for conpty_oxide::BackendErrorKind
+pub fn conpty_oxide::BackendErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for conpty_oxide::BackendErrorKind
+pub fn conpty_oxide::BackendErrorKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for conpty_oxide::BackendErrorKind
+impl core::marker::StructuralPartialEq for conpty_oxide::BackendErrorKind
+impl core::marker::Freeze for conpty_oxide::BackendErrorKind
+impl core::marker::Send for conpty_oxide::BackendErrorKind
+impl core::marker::Sync for conpty_oxide::BackendErrorKind
+impl core::marker::Unpin for conpty_oxide::BackendErrorKind
+impl core::marker::UnsafeUnpin for conpty_oxide::BackendErrorKind
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::BackendErrorKind
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::BackendErrorKind
+#[non_exhaustive] pub enum conpty_oxide::ErrorKind
+pub conpty_oxide::ErrorKind::Backend
+pub conpty_oxide::ErrorKind::Clear
+pub conpty_oxide::ErrorKind::CreateConsole
+pub conpty_oxide::ErrorKind::InvalidSize
+pub conpty_oxide::ErrorKind::Io
+pub conpty_oxide::ErrorKind::Kill
+pub conpty_oxide::ErrorKind::Resize
+pub conpty_oxide::ErrorKind::Spawn
+pub conpty_oxide::ErrorKind::UnsupportedFeature
+pub conpty_oxide::ErrorKind::Wait
+impl core::clone::Clone for conpty_oxide::ErrorKind
+pub fn conpty_oxide::ErrorKind::clone(&self) -> conpty_oxide::ErrorKind
+impl core::cmp::Eq for conpty_oxide::ErrorKind
+impl core::cmp::PartialEq for conpty_oxide::ErrorKind
+pub fn conpty_oxide::ErrorKind::eq(&self, &conpty_oxide::ErrorKind) -> bool
+impl core::fmt::Debug for conpty_oxide::ErrorKind
+pub fn conpty_oxide::ErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for conpty_oxide::ErrorKind
+pub fn conpty_oxide::ErrorKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for conpty_oxide::ErrorKind
+impl core::marker::StructuralPartialEq for conpty_oxide::ErrorKind
+impl core::marker::Freeze for conpty_oxide::ErrorKind
+impl core::marker::Send for conpty_oxide::ErrorKind
+impl core::marker::Sync for conpty_oxide::ErrorKind
+impl core::marker::Unpin for conpty_oxide::ErrorKind
+impl core::marker::UnsafeUnpin for conpty_oxide::ErrorKind
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::ErrorKind
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::ErrorKind
+pub struct conpty_oxide::BackendError
+impl conpty_oxide::BackendError
+pub const fn conpty_oxide::BackendError::io_error(&self) -> core::option::Option<&core::io::error::Error>
+pub const fn conpty_oxide::BackendError::kind(&self) -> conpty_oxide::BackendErrorKind
+impl core::convert::From<conpty_oxide::BackendError> for conpty_oxide::Error
+pub fn conpty_oxide::Error::from(conpty_oxide::BackendError) -> Self
+impl core::error::Error for conpty_oxide::BackendError
+pub fn conpty_oxide::BackendError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for conpty_oxide::BackendError
+pub fn conpty_oxide::BackendError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for conpty_oxide::BackendError
+pub fn conpty_oxide::BackendError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::BackendError
+impl core::marker::Send for conpty_oxide::BackendError
+impl core::marker::Sync for conpty_oxide::BackendError
+impl core::marker::Unpin for conpty_oxide::BackendError
+impl core::marker::UnsafeUnpin for conpty_oxide::BackendError
+impl !core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::BackendError
+impl !core::panic::unwind_safe::UnwindSafe for conpty_oxide::BackendError
+pub struct conpty_oxide::ConPtyBackend
+impl conpty_oxide::ConPtyBackend
+pub fn conpty_oxide::ConPtyBackend::auto() -> core::result::Result<Self, conpty_oxide::BackendError>
+pub fn conpty_oxide::ConPtyBackend::from_dir(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<Self, conpty_oxide::BackendError>
+pub fn conpty_oxide::ConPtyBackend::supports_clear(&self) -> bool
+pub fn conpty_oxide::ConPtyBackend::system() -> core::result::Result<Self, conpty_oxide::BackendError>
+impl core::clone::Clone for conpty_oxide::ConPtyBackend
+pub fn conpty_oxide::ConPtyBackend::clone(&self) -> Self
+impl core::fmt::Debug for conpty_oxide::ConPtyBackend
+pub fn conpty_oxide::ConPtyBackend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::ConPtyBackend
+impl core::marker::Send for conpty_oxide::ConPtyBackend
+impl core::marker::Sync for conpty_oxide::ConPtyBackend
+impl core::marker::Unpin for conpty_oxide::ConPtyBackend
+impl core::marker::UnsafeUnpin for conpty_oxide::ConPtyBackend
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::ConPtyBackend
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::ConPtyBackend
+pub struct conpty_oxide::Error
+impl conpty_oxide::Error
+pub const fn conpty_oxide::Error::backend_error(&self) -> core::option::Option<&conpty_oxide::BackendError>
+pub const fn conpty_oxide::Error::io_error(&self) -> core::option::Option<&core::io::error::Error>
+pub const fn conpty_oxide::Error::kind(&self) -> conpty_oxide::ErrorKind
+impl core::convert::From<conpty_oxide::BackendError> for conpty_oxide::Error
+pub fn conpty_oxide::Error::from(conpty_oxide::BackendError) -> Self
+impl core::convert::From<core::io::error::Error> for conpty_oxide::Error
+pub fn conpty_oxide::Error::from(core::io::error::Error) -> Self
+impl core::error::Error for conpty_oxide::Error
+pub fn conpty_oxide::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for conpty_oxide::Error
+pub fn conpty_oxide::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for conpty_oxide::Error
+pub fn conpty_oxide::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::Error
+impl core::marker::Send for conpty_oxide::Error
+impl core::marker::Sync for conpty_oxide::Error
+impl core::marker::Unpin for conpty_oxide::Error
+impl core::marker::UnsafeUnpin for conpty_oxide::Error
+impl !core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::Error
+impl !core::panic::unwind_safe::UnwindSafe for conpty_oxide::Error
+pub struct conpty_oxide::ExitStatus(_)
+impl conpty_oxide::ExitStatus
+pub const fn conpty_oxide::ExitStatus::code(&self) -> u32
+pub const fn conpty_oxide::ExitStatus::success(&self) -> bool
+impl core::clone::Clone for conpty_oxide::ExitStatus
+pub fn conpty_oxide::ExitStatus::clone(&self) -> conpty_oxide::ExitStatus
+impl core::cmp::Eq for conpty_oxide::ExitStatus
+impl core::cmp::PartialEq for conpty_oxide::ExitStatus
+pub fn conpty_oxide::ExitStatus::eq(&self, &conpty_oxide::ExitStatus) -> bool
+impl core::fmt::Debug for conpty_oxide::ExitStatus
+pub fn conpty_oxide::ExitStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for conpty_oxide::ExitStatus
+pub fn conpty_oxide::ExitStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for conpty_oxide::ExitStatus
+pub fn conpty_oxide::ExitStatus::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for conpty_oxide::ExitStatus
+impl core::marker::StructuralPartialEq for conpty_oxide::ExitStatus
+impl core::marker::Freeze for conpty_oxide::ExitStatus
+impl core::marker::Send for conpty_oxide::ExitStatus
+impl core::marker::Sync for conpty_oxide::ExitStatus
+impl core::marker::Unpin for conpty_oxide::ExitStatus
+impl core::marker::UnsafeUnpin for conpty_oxide::ExitStatus
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::ExitStatus
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::ExitStatus
+pub struct conpty_oxide::PtyController
+impl conpty_oxide::PtyController
+pub fn conpty_oxide::PtyController::clear(&self) -> conpty_oxide::Result<()>
+pub fn conpty_oxide::PtyController::resize(&self, conpty_oxide::Size) -> conpty_oxide::Result<()>
+pub fn conpty_oxide::PtyController::size(&self) -> conpty_oxide::Size
+pub fn conpty_oxide::PtyController::supports_clear(&self) -> bool
+impl core::clone::Clone for conpty_oxide::PtyController
+pub fn conpty_oxide::PtyController::clone(&self) -> conpty_oxide::PtyController
+impl core::fmt::Debug for conpty_oxide::PtyController
+pub fn conpty_oxide::PtyController::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::PtyController
+impl core::marker::Send for conpty_oxide::PtyController
+impl core::marker::Sync for conpty_oxide::PtyController
+impl core::marker::Unpin for conpty_oxide::PtyController
+impl core::marker::UnsafeUnpin for conpty_oxide::PtyController
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::PtyController
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::PtyController
+pub struct conpty_oxide::SessionOptions
+impl conpty_oxide::SessionOptions
+pub fn conpty_oxide::SessionOptions::backend(self, conpty_oxide::ConPtyBackend) -> Self
+pub fn conpty_oxide::SessionOptions::new() -> Self
+pub const fn conpty_oxide::SessionOptions::size(self, conpty_oxide::Size) -> Self
+impl core::clone::Clone for conpty_oxide::SessionOptions
+pub fn conpty_oxide::SessionOptions::clone(&self) -> conpty_oxide::SessionOptions
+impl core::default::Default for conpty_oxide::SessionOptions
+pub fn conpty_oxide::SessionOptions::default() -> conpty_oxide::SessionOptions
+impl core::fmt::Debug for conpty_oxide::SessionOptions
+pub fn conpty_oxide::SessionOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::SessionOptions
+impl core::marker::Send for conpty_oxide::SessionOptions
+impl core::marker::Sync for conpty_oxide::SessionOptions
+impl core::marker::Unpin for conpty_oxide::SessionOptions
+impl core::marker::UnsafeUnpin for conpty_oxide::SessionOptions
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::SessionOptions
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::SessionOptions
+pub struct conpty_oxide::SessionOutput
+impl conpty_oxide::SessionOutput
+pub fn conpty_oxide::SessionOutput::as_bytes(&self) -> &[u8]
+pub fn conpty_oxide::SessionOutput::into_bytes(self) -> alloc::vec::Vec<u8>
+pub const fn conpty_oxide::SessionOutput::status(&self) -> conpty_oxide::ExitStatus
+impl core::fmt::Debug for conpty_oxide::SessionOutput
+pub fn conpty_oxide::SessionOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for conpty_oxide::SessionOutput
+impl core::marker::Send for conpty_oxide::SessionOutput
+impl core::marker::Sync for conpty_oxide::SessionOutput
+impl core::marker::Unpin for conpty_oxide::SessionOutput
+impl core::marker::UnsafeUnpin for conpty_oxide::SessionOutput
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::SessionOutput
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::SessionOutput
+pub struct conpty_oxide::Size
+impl conpty_oxide::Size
+pub const conpty_oxide::Size::MAX_DIMENSION: u16
+pub const fn conpty_oxide::Size::cols(&self) -> u16
+pub const fn conpty_oxide::Size::rows(&self) -> u16
+pub const fn conpty_oxide::Size::try_new(u16, u16) -> conpty_oxide::Result<Self>
+impl core::clone::Clone for conpty_oxide::Size
+pub fn conpty_oxide::Size::clone(&self) -> conpty_oxide::Size
+impl core::cmp::Eq for conpty_oxide::Size
+impl core::cmp::PartialEq for conpty_oxide::Size
+pub fn conpty_oxide::Size::eq(&self, &conpty_oxide::Size) -> bool
+impl core::default::Default for conpty_oxide::Size
+pub fn conpty_oxide::Size::default() -> Self
+impl core::fmt::Debug for conpty_oxide::Size
+pub fn conpty_oxide::Size::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for conpty_oxide::Size
+pub fn conpty_oxide::Size::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for conpty_oxide::Size
+pub fn conpty_oxide::Size::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for conpty_oxide::Size
+impl core::marker::StructuralPartialEq for conpty_oxide::Size
+impl core::marker::Freeze for conpty_oxide::Size
+impl core::marker::Send for conpty_oxide::Size
+impl core::marker::Sync for conpty_oxide::Size
+impl core::marker::Unpin for conpty_oxide::Size
+impl core::marker::UnsafeUnpin for conpty_oxide::Size
+impl core::panic::unwind_safe::RefUnwindSafe for conpty_oxide::Size
+impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::Size
+pub type conpty_oxide::Result<T> = core::result::Result<T, conpty_oxide::Error>
