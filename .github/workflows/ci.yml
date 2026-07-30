@@ -20,6 +20,7 @@ jobs:
   policy:
     name: Repository policy
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
@@ -30,6 +31,20 @@ jobs:
       - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14  # v4
         with:
           version: 2026.7.13
+          # Avoid cold-installing test, coverage, mutation, hook, and API
+          # tools that this job never invokes.
+          install_args: >-
+            just
+            aqua:EmbarkStudios/cargo-deny
+            aqua:koalaman/shellcheck
+            aqua:rhysd/actionlint
+            aqua:rvben/rumdl
+            cargo:cargo-shear
+            cargo:typos-cli
+            cargo:taplo-cli
+            uv
+            pipx:reuse
+            pipx:yamllint
       - name: Install the pinned PowerShell analyzer
         run: just setup-powershell-lint
       - name: Run repository policy

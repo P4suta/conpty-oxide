@@ -130,21 +130,19 @@ fn drop_console_before_user_pipe_ends() {
 }
 
 #[test]
-fn final_defense_detaches_exactly_when_a_legacy_reader_may_still_exist() {
+fn final_defense_detaches_legacy_close_until_reader_eof() {
     for reader in [ReaderState::Open, ReaderState::Drained, ReaderState::Closed] {
-        for deferred in [false, true] {
-            assert!(
-                !should_close_on_detached_thread(reader, deferred, true),
-                "released sessions always close inline: {reader:?}, deferred={deferred}"
-            );
-            let expected =
-                reader == ReaderState::Open || (reader == ReaderState::Closed && deferred);
-            assert_eq!(
-                should_close_on_detached_thread(reader, deferred, false),
-                expected,
-                "legacy reader={reader:?}, deferred={deferred}"
-            );
-        }
+        let legacy = backend().without_release();
+        let (console, conout_read, conin_write) = console_and_user_ends(legacy);
+        let mode = Arc::new(AtomicU8::new(0));
+        console.shared().observe_drop_mode(Arc::clone(&mode));
+        console.shared().lock().reader = reader;
+
+        drop(console);
+        let expected = if reader == ReaderState::Drained { 2 } else { 1 };
+        assert_eq!(mode.load(Ordering::SeqCst), expected, "reader={reader:?}");
+        drop(conout_read);
+        drop(conin_write);
     }
 }
 
@@ -200,6 +198,51 @@ fn legacy_request_close_with_live_reader_completes() {
         drop(conout_read);
         drop(conin_write);
     });
+}
+
+#[cfg(any(feature = "blocking", feature = "tokio"))]
+#[test]
+fn input_close_worker_spawn_failure_keeps_close_retryable() {
+    complete_within_5s(
+        "input_close_worker_spawn_failure_keeps_close_retryable",
+        || {
+            let legacy = backend().without_release();
+            let (console, conout_read, conin_write) = console_and_user_ends(legacy);
+            let shared = Arc::clone(console.shared());
+
+            shared.request_close_detached_with_worker_spawn_failure();
+            assert!(
+                !shared.is_closed(),
+                "a failed handoff must not claim the live HPCON"
+            );
+            console
+                .resize(crate::size::test_size(40, 100))
+                .expect("the live HPCON must remain usable after the failed handoff");
+
+            // A later request can claim the same HPCON. Retire the raw reader
+            // first so the real worker has no output pipe to wait on.
+            drop(conout_read);
+            shared.notify_reader_closed();
+            shared.request_close_detached();
+            assert!(shared.is_closed());
+
+            drop(conin_write);
+            drop(console);
+        },
+    );
+}
+
+#[cfg(feature = "tracing")]
+#[test]
+fn close_worker_spawn_failure_is_logged() {
+    let events = crate::tracing_test_support::count_events(|| {
+        log_close_worker_spawn_failure(
+            &io::Error::other("injected close worker failure"),
+            "test-close-worker",
+            true,
+        );
+    });
+    assert_eq!(events, 1);
 }
 
 #[test]
@@ -288,36 +331,6 @@ fn released_console_drops_cleanly_in_any_order() {
         drop(conin_write);
         drop(conout_read);
     });
-}
-
-/// The async reader's teardown shape: the state machine hears "closed"
-/// while the conout read end is still open at the OS level (`conout_read`
-/// is deliberately held across the drops below, standing in for an
-/// overlapped read the runtime's I/O driver has not retired yet). The
-/// final-defense drop must route the close to the detached closer thread
-/// instead of running it inline — on a pre-24H2 host an inline close
-/// could block on the still-open read end, wedging the dropping thread.
-/// On a modern host both paths are prompt, so here this is a liveness and
-/// soundness smoke test of the detached routing.
-#[cfg(feature = "tokio")]
-#[test]
-fn deferred_reader_close_drop_completes_with_the_read_end_open() {
-    complete_within_5s(
-        "deferred_reader_close_drop_completes_with_the_read_end_open",
-        || {
-            let (console, conout_read, conin_write) = console_and_user_ends(backend());
-            let shared = Arc::clone(console.shared());
-            shared.set_reader_close_deferred();
-            assert!(shared.lock().reader_close_deferred);
-            shared.notify_reader_closed();
-            drop(shared);
-            drop(console);
-            // Only now does the "read end" disappear; the drops above must
-            // not have waited for it.
-            drop(conout_read);
-            drop(conin_write);
-        },
-    );
 }
 
 #[test]

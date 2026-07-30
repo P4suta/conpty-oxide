@@ -64,13 +64,19 @@ pub(crate) const CLEAR_FEATURE: &str = "ClearPseudoConsole";
 pub(crate) struct Session {
     console: PseudoConsole,
     eof_on_root_exit: bool,
-    /// Whether a root child has been spawned into this pseudoconsole.
+    /// Whether a root-child spawn has been reserved for this pseudoconsole.
     ///
     /// One session hosts exactly one root child. Re-using a session would be
     /// unsound rather than merely surprising: on a legacy backend the watcher
     /// closes the pseudoconsole after the first child exits, and a second
     /// `CreateProcessW` would then hand a freed `HPCON` to the kernel.
     spawned: AtomicBool,
+    /// Whether `CreateProcessW` attached a child to this pseudoconsole.
+    ///
+    /// Kept separate from `spawned`: that flag is claimed before the
+    /// fallible process creation to serialize competing attempts, while input
+    /// retirement must request close only after a child really exists.
+    attached: AtomicBool,
 }
 
 impl Session {
@@ -81,6 +87,7 @@ impl Session {
             console,
             eof_on_root_exit,
             spawned: AtomicBool::new(false),
+            attached: AtomicBool::new(false),
         }
     }
 
@@ -126,6 +133,19 @@ impl Session {
     /// Returns which `ConPTY` implementation backs this session.
     pub(crate) fn backend_kind(&self) -> &BackendKind {
         self.console.backend_kind()
+    }
+
+    /// Ends a spawned session after its input pipe has been closed.
+    ///
+    /// Closing conin alone does not reliably disconnect console clients on
+    /// pre-24H2 Windows. Requesting the pseudoconsole close sends the required
+    /// `CTRL_CLOSE_EVENT`; the lifecycle core keeps legacy close off this
+    /// caller's thread so output can continue draining concurrently.
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    pub(crate) fn request_close_after_input(&self) {
+        if self.attached.load(Ordering::SeqCst) {
+            self.console.shared().request_close_detached();
+        }
     }
 }
 
@@ -188,6 +208,7 @@ pub(crate) fn spawn_root(
             return Err(spawn_error(command, err));
         },
     };
+    session.attached.store(true, Ordering::SeqCst);
 
     // Step two of the lifecycle, immediately after the child exists: hand the
     // pseudoconsole its own lifetime back, so that it exits when the last

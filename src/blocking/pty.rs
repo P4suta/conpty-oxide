@@ -32,10 +32,11 @@ use crate::PtyController;
 /// # Teardown
 ///
 /// Dropping a `Pty` retires the read end first, then the write end, then the
-/// pseudoconsole itself, which is the order that keeps `ClosePseudoConsole`
-/// from blocking: with the read end gone the console host's writes fail
-/// instead of waiting for a reader. Dropping never blocks and never leaks the
-/// session, whatever order the halves of a split session are dropped in.
+/// pseudoconsole itself. Dropping never waits for legacy
+/// `ClosePseudoConsole`: a close that may block is handed to a detached
+/// worker, whatever order the halves of a split session are dropped in. If
+/// Windows cannot create that worker, teardown leaves the handle for process
+/// cleanup instead of risking a wedged destructor.
 ///
 /// Because closing the input pipe is part of that teardown, dropping a `Pty`
 /// whose child is still running **terminates the child** — see the module
@@ -328,12 +329,12 @@ impl Read for OwnedReadHalf {
 ///
 /// # Dropping this half ends the session
 ///
-/// Closing the input pipe is not a polite "no more input" signal. The console
-/// host reads it as the terminal being closed and sends a close event to every
-/// attached client, so a child that is still running is terminated with exit
-/// code `0xC000013A` (`STATUS_CONTROL_C_EXIT`) and loses any output it had not
-/// written yet. Hold on to this half until the child has exited — or drop it
-/// deliberately, as a way to end a session that ignores everything else.
+/// Closing this half is not a polite "no more input" signal. It closes conin
+/// and requests pseudoconsole close, which sends a close event to every
+/// attached client. A child that is still running is therefore terminated
+/// with exit code `0xC000013A` (`STATUS_CONTROL_C_EXIT`) and loses any output
+/// it had not written yet. Hold on to this half until the child has exited —
+/// or drop it deliberately to end a session that ignores everything else.
 pub struct OwnedWriteHalf {
     writer: ConinWriter,
     /// Keeps the console alive even when every controller is dropped first.
@@ -448,26 +449,32 @@ impl Drop for ConoutReader {
     }
 }
 
-/// The write end of the conin pipe.
+/// The write end of the conin pipe and its session-close notification.
 ///
-/// Nothing but the handle: dropping it closes the pipe, which the console
-/// host reads as the terminal going away and tears the session down.
+/// Dropping closes the pipe first, then asks the lifecycle core to close a
+/// spawned pseudoconsole. The explicit close request is required on legacy
+/// Windows, where conin end-of-file alone does not reliably retire clients.
 #[derive(Debug)]
 pub(super) struct ConinWriter {
-    file: File,
+    file: Option<File>,
+    session: Arc<SessionCore>,
 }
 
 impl ConinWriter {
-    pub(super) fn new(handle: OwnedHandle) -> Self {
+    pub(super) fn new(handle: OwnedHandle, session: Arc<SessionCore>) -> Self {
         Self {
-            file: File::from(handle),
+            file: Some(File::from(handle)),
+            session,
         }
     }
 }
 
 impl Write for ConinWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.file.write(buf)
+        self.file
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "input is closed"))?
+            .write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -476,6 +483,16 @@ impl Write for ConinWriter {
         // call `FlushFileBuffers`, which on a pipe blocks until the *reader*
         // has consumed everything — a deadlock, not a flush.
         Ok(())
+    }
+}
+
+impl Drop for ConinWriter {
+    fn drop(&mut self) {
+        // Close conin before requesting HPCON close. The detached legacy
+        // closer may start immediately, and must observe the terminal input
+        // as already retired.
+        drop(self.file.take());
+        self.session.request_close_after_input();
     }
 }
 

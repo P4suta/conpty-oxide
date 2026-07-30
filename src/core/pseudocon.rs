@@ -37,8 +37,8 @@
 //!
 //! # When is `ClosePseudoConsole` allowed to run?
 //!
-//! Close executes only at a state transition, in one of these situations,
-//! each with a proof that it cannot block indefinitely:
+//! Close executes only at a state transition. Inline callers have a proof
+//! that it is prompt; legacy callers that may wait run on dedicated threads:
 //!
 //! 1. **Reader drained** (`notify_reader_eof`): end-of-file means the console
 //!    host is already gone (our own copy of the conout write end was closed
@@ -47,26 +47,18 @@
 //!    the close: it has finished reading, so the "never close from the reader
 //!    thread" rule — whose entire point is that the reader must stay able to
 //!    drain — is vacuously satisfied.
-//! 2. **Reader closed** (`notify_reader_closed`): the conout read end is
-//!    gone, so the host's writes fail with a broken pipe instead of blocking;
-//!    the host exits and close returns. This is the documented "close the
-//!    output pipe first" shutdown. An async front end cannot always deliver
-//!    this proof — dropping a Tokio pipe closes the OS handle only once the
-//!    I/O driver retires its in-flight read — so such sessions are marked
-//!    with [`ConsoleShared::set_reader_close_deferred`] and the final-defense
-//!    [`Drop`] refuses to lean on case 2 for them. The notification-driven
-//!    closes reached from `notify_reader_closed` itself only ever run in
-//!    released mode (a deferred `request_close`), where close is prompt
-//!    regardless of the reader.
-//! 3. **Explicit request with no live reader** (`request_close`): same proof
-//!    as 1/2 depending on the reader state.
+//! 2. **Reader closed** (`notify_reader_closed`): a pending close can only be
+//!    the deferred request of a released session, where close is prompt
+//!    regardless of the reader. Legacy final-defense close never relies on a
+//!    reader-close notification: unless EOF already proved the host is gone,
+//!    it runs on a detached thread on pre-24H2 hosts.
+//! 3. **Explicit request with no live reader** (`request_close`): released
+//!    sessions close promptly; legacy requests still originate on a dedicated
+//!    worker so an old-host wait can never wedge application teardown.
 //! 4. **Explicit request with a live reader, legacy mode** (`request_close`
-//!    from the legacy watcher): close runs on the *caller's* thread and may
-//!    genuinely block while the reader drains — this is the documented "keep
-//!    reading" shutdown, and it is the only way legacy mode can ever generate
-//!    end-of-file. The caller contract is therefore: a dedicated, non-reader
-//!    thread that may block (the post-exit close worker qualifies; `Drop` never
-//!    calls this).
+//!    from the legacy watcher or input closer): close runs on the worker and
+//!    may genuinely block while the reader drains. This is the documented
+//!    "keep reading" shutdown and the way legacy mode generates end-of-file.
 //! 5. **Explicit request with a live reader, released mode**: close is
 //!    *deferred* (`CloseState::Requested`). Natural end-of-file is on its
 //!    way, and the reader's own transition (case 1 or 2) finishes the job.
@@ -74,14 +66,10 @@
 //!    deferring keeps a single rule — "close only after the reader is done,
 //!    except on the blocking-capable watcher path" — instead of two.
 //!
-//! The alternative design — always delegating the close to a short-lived
-//! dedicated thread — was considered and rejected for the normal paths: the
-//! per-close thread spawn buys nothing when the call is proven prompt (cases
-//! 1–3), and it turns deterministic teardown into a race against process
-//! exit (a detached closer that has not run yet when `main` returns silently
-//! leaks the session). The dedicated-thread trick is kept exactly where it
-//! is needed: the final-defense `Drop`, which must never block and may run
-//! while a leaked conout read end is still open (see below).
+//! A dedicated thread is used exactly where old Windows may wait: input-side
+//! retirement, the legacy root-exit watcher, and legacy final-defense `Drop`.
+//! Released and drained-reader transitions remain synchronous and
+//! deterministic.
 //!
 //! # Double-close and drop-order safety
 //!
@@ -99,6 +87,8 @@ use std::io;
 use std::os::windows::io::{AsHandle, OwnedHandle};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(any(feature = "blocking", feature = "tokio"))]
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
@@ -151,9 +141,6 @@ struct State {
     release_failed: bool,
     reader: ReaderState,
     close: CloseState,
-    /// Whether a `Closed` reader may lag the OS-level close of the conout
-    /// read end; see [`ConsoleShared::set_reader_close_deferred`].
-    reader_close_deferred: bool,
     /// Records whether final-defense Drop chose detached (1) or inline (2).
     #[cfg(test)]
     drop_observer: Option<Arc<AtomicU8>>,
@@ -167,7 +154,6 @@ impl State {
             release_failed: false,
             reader: ReaderState::Open,
             close: CloseState::NotRequested,
-            reader_close_deferred: false,
             #[cfg(test)]
             drop_observer: None,
         }
@@ -247,24 +233,6 @@ impl ConsoleShared {
         }
     }
 
-    /// Records that this session's conout read end may still exist at the OS
-    /// level after [`Self::notify_reader_closed`] has been called.
-    ///
-    /// The async front end calls this once per session, right after creation.
-    /// Dropping a Tokio named pipe does not synchronously close the handle
-    /// while an overlapped operation is in flight: the drop only cancels the
-    /// pending read, and the `CloseHandle` runs when the runtime's I/O driver
-    /// retires the cancelled operation. A `Closed` reader therefore proves
-    /// the reader will never read again, but *not* that the conout read end
-    /// is gone at the OS level — so the final-defense [`Drop`] must not use
-    /// "reader closed" as a promptness proof for `ClosePseudoConsole` (see
-    /// there). The blocking front end never calls this: its read end is a
-    /// plain `OwnedHandle` whose drop closes synchronously.
-    #[cfg(feature = "tokio")]
-    pub(crate) fn set_reader_close_deferred(&self) {
-        self.lock().reader_close_deferred = true;
-    }
-
     /// Records that the conout reader observed end-of-file and closes the
     /// remaining `HPCON` reference.
     ///
@@ -301,12 +269,11 @@ impl ConsoleShared {
     ///
     /// Behaviour by state:
     ///
-    /// - Reader `Drained`/`Closed`: closes now, on this thread (prompt; see
-    ///   the module docs). On a session with a deferred reader close (the
-    ///   async front end), a `Closed` reader's OS handle may briefly outlive
-    ///   the notification, so this can block until the runtime's I/O driver
-    ///   retires the reader's last operation — which the caller contract
-    ///   below already tolerates.
+    /// - Reader `Drained`: closes now, on this thread. End-of-file proves the
+    ///   console host is gone, so close is prompt.
+    /// - Reader `Closed`: closes now, on this thread. Released backends are
+    ///   prompt; a legacy backend may still wait for concurrent console-host
+    ///   teardown, which the caller contract below already tolerates.
     /// - Reader `Open`, released mode: defers; the reader's own
     ///   end-of-file/close transition finishes the close.
     /// - Reader `Open`, legacy mode: closes now, on this thread, which may
@@ -332,6 +299,85 @@ impl ConsoleShared {
             return;
         }
         self.execute_close(state);
+    }
+
+    /// Requests close without ever running a legacy `ClosePseudoConsole` on
+    /// the caller's thread.
+    ///
+    /// Input-pipe shutdown uses this path. On released backends close is
+    /// nonblocking, so the ordinary state transition can run inline. On
+    /// legacy backends a dedicated thread performs the request while the
+    /// caller remains free to drain output; that thread may wait until every
+    /// console client has handled `CTRL_CLOSE_EVENT`.
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    pub(crate) fn request_close_detached(self: &Arc<Self>) {
+        self.request_close_detached_inner(true);
+    }
+
+    /// Exercises the input-close thread-creation fallback without depending
+    /// on machine-wide resource exhaustion.
+    #[cfg(all(test, any(feature = "blocking", feature = "tokio")))]
+    fn request_close_detached_with_worker_spawn_failure(self: &Arc<Self>) {
+        self.request_close_detached_inner(false);
+    }
+
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    fn request_close_detached_inner(self: &Arc<Self>, spawn_worker: bool) {
+        if self.is_released() {
+            self.request_close();
+            return;
+        }
+
+        // Create the worker before claiming the HPCON. The gate keeps it from
+        // touching the handle until the mutex-protected claim succeeds. If
+        // thread creation fails, the state remains retryable by a watcher,
+        // a later request, or final-defense Drop.
+        let (start_tx, start_rx) = mpsc::channel();
+        let spawned = spawn_gated_close(
+            self.backend.clone(),
+            self.hpcon,
+            "conpty-oxide-input-close",
+            start_rx,
+            spawn_worker,
+        );
+        if let Err(err) = spawned {
+            log_close_worker_spawn_failure(&err, "conpty-oxide-input-close", true);
+            return;
+        }
+
+        let mut state = self.lock();
+        if state.close == CloseState::Done {
+            drop(state);
+            let _cancelled = start_tx.send(false);
+            return;
+        }
+        if state.released {
+            drop(state);
+            let _cancelled = start_tx.send(false);
+            self.request_close();
+            return;
+        }
+        state.close = CloseState::Done;
+        drop(state);
+
+        if start_tx.send(true).is_err() {
+            // The worker cannot have called close: receiving `true` is the
+            // only route to that call, and a failed send proves it did not
+            // receive the claim. Restore retryability instead of stranding
+            // the live HPCON in `Done`.
+            let mut state = self.lock();
+            debug_assert_eq!(state.close, CloseState::Done);
+            state.close = CloseState::NotRequested;
+            drop(state);
+            log_close_worker_spawn_failure(
+                &io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "pseudoconsole close worker exited before ownership handoff",
+                ),
+                "conpty-oxide-input-close",
+                true,
+            );
+        }
     }
 
     /// Closes now if a request is pending and the reader is out of the way.
@@ -493,22 +539,18 @@ impl ConsoleShared {
 /// here — without ever blocking the dropping thread.
 ///
 /// Running at all means every `Arc<ConsoleShared>` is gone, so no wrapper
-/// that could still transition the state exists. Two cases:
+/// that could still transition the state exists. Three cases:
 ///
-/// - Released mode, reader `Drained`, or reader `Closed` by a synchronous
-///   drop: the close is proven prompt (module docs, cases 1/2; in released
-///   mode close never blocks), so run it inline.
-/// - Reader still `Open` in legacy mode — or `Closed` in legacy mode on a
-///   session whose reader close is *deferred* (the async front end, see
-///   [`ConsoleShared::set_reader_close_deferred`]): state claims a conout
-///   read end may still exist at the OS level (a leaked raw handle, ends
-///   dropped without a notification, or an overlapped read the runtime's I/O
-///   driver has not retired yet), so `ClosePseudoConsole` could block until
-///   that end disappears — and on a current-thread runtime the dropping
-///   thread may be the only one that can make it disappear. Delegate to a
-///   detached short-lived thread and do not join it: a `Drop` must never
-///   block. If even spawning the thread fails, leak the `HPCON` — a leak is
-///   reclaimed at process exit, a wedged destructor is not.
+/// - Released mode: close is proven prompt, so run it inline.
+/// - Legacy mode after observed EOF: the console host is already gone, so
+///   close is prompt and deterministic inline.
+/// - Every other legacy state: delegate to a detached thread. Although
+///   closing the output pipe is the documented way to make old
+///   `ClosePseudoConsole` return, real pre-24H2 hosts can still wait during
+///   concurrent client and console-host teardown. No `Drop` path is allowed
+///   to inherit that wait. If even spawning the thread fails, leak the
+///   `HPCON` — a leak is reclaimed at process exit, while a wedged destructor
+///   is not.
 impl Drop for ConsoleShared {
     fn drop(&mut self) {
         // `get_mut`: no other reference exists, so no lock is needed; recover
@@ -519,31 +561,12 @@ impl Drop for ConsoleShared {
         }
         state.close = CloseState::Done;
 
-        if should_close_on_detached_thread(
-            state.reader,
-            state.reader_close_deferred,
-            state.released,
-        ) {
+        if !state.released && state.reader != ReaderState::Drained {
             #[cfg(test)]
             if let Some(observer) = &state.drop_observer {
                 observer.store(1, Ordering::SeqCst);
             }
-            let backend = self.backend.clone();
-            // `windows-sys` represents `HPCON` as its pointer-sized integer
-            // handle type. The `Done` claim above makes the receiver the sole
-            // remaining user.
-            let hpcon = self.hpcon;
-            let spawned = thread::Builder::new()
-                .name("conpty-oxide-close".into())
-                .spawn(move || {
-                    // SAFETY: sole closer (claimed above); the pseudoconsole
-                    // object lives in the OS, not in `ConsoleShared`, so it
-                    // is still valid after the `ConsoleShared` is freed.
-                    unsafe { backend.close(hpcon) };
-                });
-            if spawned.is_err() {
-                // Deliberate leak; see the doc comment above.
-            }
+            spawn_detached_close(self.backend.clone(), self.hpcon, "conpty-oxide-close");
             return;
         }
 
@@ -557,14 +580,70 @@ impl Drop for ConsoleShared {
     }
 }
 
-/// Decides whether final-defense close may block the dropping thread.
-fn should_close_on_detached_thread(
-    reader: ReaderState,
-    reader_close_deferred: bool,
-    released: bool,
-) -> bool {
-    !released
-        && (reader == ReaderState::Open || (reader == ReaderState::Closed && reader_close_deferred))
+/// Hands a claimed legacy `HPCON` to a thread that may block in close.
+///
+/// The backend clone is deliberately moved with the handle so an external
+/// DLL stays loaded through the FFI call. If thread creation fails, the
+/// already-claimed handle is deliberately leaked; no safe inline fallback
+/// exists on pre-24H2 Windows.
+fn spawn_detached_close(backend: ConPtyBackend, hpcon: HPCON, name: &'static str) {
+    let spawned = thread::Builder::new().name(name.into()).spawn(move || {
+        // SAFETY: the caller claimed sole close ownership before handing the
+        // handle to this worker, and the backend clone keeps its code loaded.
+        unsafe { backend.close(hpcon) };
+    });
+    match spawned {
+        Ok(worker) => drop(worker),
+        Err(err) => log_close_worker_spawn_failure(&err, name, false),
+    }
+}
+
+/// Starts a close worker behind a one-message ownership gate.
+#[cfg(any(feature = "blocking", feature = "tokio"))]
+fn spawn_gated_close(
+    backend: ConPtyBackend,
+    hpcon: HPCON,
+    name: &'static str,
+    start: mpsc::Receiver<bool>,
+    spawn_worker: bool,
+) -> io::Result<()> {
+    let spawned = if spawn_worker {
+        thread::Builder::new().name(name.into()).spawn(move || {
+            if matches!(start.recv(), Ok(true)) {
+                // SAFETY: `true` is sent only after the lifecycle state has
+                // claimed sole close ownership. The backend clone pins any
+                // external DLL until this call returns.
+                unsafe { backend.close(hpcon) };
+            }
+        })
+    } else {
+        Err(io::Error::other(
+            "pseudoconsole close worker spawn failure injected by a crate-local test",
+        ))
+    };
+    spawned.map(drop)
+}
+
+/// Reports a close-worker failure without trusting subscriber code in Drop.
+#[cfg(feature = "tracing")]
+fn log_close_worker_spawn_failure(err: &io::Error, worker: &'static str, retryable: bool) {
+    let logged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tracing::error!(
+            error = %err,
+            worker,
+            retryable,
+            "failed to spawn or start pseudoconsole close worker"
+        );
+    }));
+    if let Err(payload) = logged {
+        // A subscriber is arbitrary user code. Drop must never propagate its
+        // panic, and a user-defined panic-payload destructor may also panic.
+        std::mem::forget(payload);
+    }
+}
+
+#[cfg(not(feature = "tracing"))]
+const fn log_close_worker_spawn_failure(_err: &io::Error, _worker: &'static str, _retryable: bool) {
 }
 
 /// Normalizes "the console host is already gone" into

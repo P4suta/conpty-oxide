@@ -26,11 +26,10 @@
 //! # Closing the input pipe ends the session
 //!
 //! Dropping the write half of a session is **not** the console equivalent of
-//! closing a child's stdin. The console host treats end-of-file on its input
-//! pipe as "the terminal window was closed" and sends a close event to every
-//! attached client, which terminates them: a child killed this way reports
-//! exit code `0xC000013A` (`STATUS_CONTROL_C_EXIT`) and any output it had not
-//! flushed yet is lost.
+//! closing a child's stdin. The crate closes conin and requests pseudoconsole
+//! close; the latter sends a close event to every attached client, which
+//! terminates them. A child killed this way reports exit code `0xC000013A`
+//! (`STATUS_CONTROL_C_EXIT`) and any output it had not flushed yet is lost.
 //!
 //! Keep the write half — or the whole [`Session`] — alive until the child has
 //! exited. Dropping it earlier is a way to *stop* a session, not a way to

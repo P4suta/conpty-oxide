@@ -40,8 +40,11 @@ use crate::PtyController;
 /// # Teardown
 ///
 /// Dropping a `Pty` retires the read end first, then the write end, then the
-/// pseudoconsole itself. Dropping never blocks and never leaks the session,
-/// whatever order the halves of a split session are dropped in.
+/// pseudoconsole itself. Dropping never waits for legacy
+/// `ClosePseudoConsole`: a close that may block is handed to a detached
+/// worker, whatever order the halves of a split session are dropped in. If
+/// Windows cannot create that worker, teardown leaves the handle for process
+/// cleanup instead of risking a wedged destructor.
 ///
 /// One async-specific caveat: dropping a session's pipes only *initiates*
 /// their OS-level close. An overlapped operation still in flight is
@@ -385,12 +388,12 @@ impl AsyncRead for OwnedReadHalf {
 ///
 /// # Dropping — or shutting down — this half ends the session
 ///
-/// Closing the input pipe is not a polite "no more input" signal. The console
-/// host reads it as the terminal being closed and sends a close event to every
-/// attached client, so a child that is still running is terminated with exit
-/// code `0xC000013A` (`STATUS_CONTROL_C_EXIT`) and loses any output it had not
-/// written yet. Hold on to this half until the child has exited — or close it
-/// deliberately, as a way to end a session that ignores everything else.
+/// Closing this half is not a polite "no more input" signal. It closes conin
+/// and requests pseudoconsole close, which sends a close event to every
+/// attached client. A child that is still running is therefore terminated
+/// with exit code `0xC000013A` (`STATUS_CONTROL_C_EXIT`) and loses any output
+/// it had not written yet. Hold on to this half until the child has exited —
+/// or close it deliberately to end a session that ignores everything else.
 ///
 /// `AsyncWriteExt::shutdown` is that deliberate close: it never blocks, it
 /// cancels a write still in flight rather than flushing it, and it makes
@@ -520,11 +523,10 @@ impl AsyncRead for ConoutReader {
 /// — the drop cancels the read, and the `CloseHandle` runs when the driver
 /// retires the cancelled operation, not here. The notification therefore must
 /// not be taken as proof that the conout read end is gone, and the lifecycle
-/// machinery does not take it as one: the session is marked at build time
-/// (`set_reader_close_deferred`), so a `ClosePseudoConsole` that would need
-/// that proof to be prompt is routed to a detached thread instead of running
-/// on this destructor's thread. Both steps below are synchronous and
-/// non-blocking, which is what lets them happen in a destructor at all.
+/// machinery does not take it as one: every legacy final close is routed to a
+/// detached thread instead of running on this destructor's thread. Both steps
+/// below are synchronous and nonblocking, which is what lets them happen in a
+/// destructor at all.
 impl Drop for ConoutReader {
     fn drop(&mut self) {
         drop(self.pipe.take());
@@ -534,22 +536,24 @@ impl Drop for ConoutReader {
 
 /// The server end of the conin named pipe.
 ///
-/// Nothing but the handle: dropping it — or shutting it down — closes the
-/// pipe, which the console host reads as the terminal going away. Both go
-/// through [`Self::close_pipe`], which cancels an in-flight write first.
+/// Dropping it — or shutting it down — closes the pipe and requests session
+/// close. Both operations go through [`Self::close_pipe`], which cancels an
+/// in-flight write first and notifies the lifecycle core exactly once.
 #[derive(Debug)]
 pub(super) struct ConinWriter {
     /// `None` once the pipe has been closed by a shutdown.
     pipe: Option<NamedPipeServer>,
+    session: Arc<SessionCore>,
     /// Per-instance proof that Drop took the cancellation path.
     #[cfg(test)]
     close_observer: Option<Arc<AtomicBool>>,
 }
 
 impl ConinWriter {
-    pub(super) const fn new(pipe: NamedPipeServer) -> Self {
+    pub(super) const fn new(pipe: NamedPipeServer, session: Arc<SessionCore>) -> Self {
         Self {
             pipe: Some(pipe),
+            session,
             #[cfg(test)]
             close_observer: None,
         }
@@ -593,6 +597,7 @@ impl ConinWriter {
         // schedules the close — either way.
         unsafe { CancelIoEx(pipe.as_raw_handle(), ptr::null()) };
         drop(pipe);
+        self.session.request_close_after_input();
     }
 }
 

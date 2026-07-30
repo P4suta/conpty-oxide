@@ -136,10 +136,11 @@ impl PtyBuilder {
         .map_err(Error::create_console)?;
 
         let shared = Arc::clone(console.shared());
+        let inner = Arc::new(SessionCore::new(console, self.options.eof_on_root_exit));
         Ok(Pty {
             reader: ConoutReader::new(conout_read, shared),
-            writer: ConinWriter::new(conin_write),
-            inner: Arc::new(SessionCore::new(console, self.options.eof_on_root_exit)),
+            writer: ConinWriter::new(conin_write, Arc::clone(&inner)),
+            inner,
         })
     }
 }

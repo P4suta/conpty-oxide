@@ -711,48 +711,56 @@ fn reading_an_empty_buffer_is_not_end_of_file() {
 #[test]
 fn dropping_the_write_half_terminates_the_child() {
     complete_within("dropping_the_write_half_terminates_the_child", || {
-        const MARKER: &str = "conpty-oxide-conin-drop-marker";
-
-        let pty = pty();
-        let mut child = Command::new("cmd.exe")
-            .spawn_in(&pty)
-            .expect("spawning must succeed");
-        let _controller = pty.controller();
-        let (mut reader, mut writer) = pty.into_split();
-
-        // Closing conin only ends a session that has a client to send
-        // the close event to, so first prove the child is attached and
-        // reading console input: an interactive `cmd.exe` cannot echo
-        // this line before it has done both.
-        writer
-            .write_all(format!("echo {MARKER}\r\n").as_bytes())
-            .expect("writing console input must succeed");
-        let mut seen = String::new();
-        let mut buf = [0u8; 4096];
-        while !seen.contains(MARKER) {
-            let read = reader.read(&mut buf).expect("reading must succeed");
-            assert_ne!(read, 0, "the session ended before the child started");
-            seen.push_str(&String::from_utf8_lossy(&buf[..read]));
-        }
-
-        drop(writer);
-
-        // The console host reads the closed input pipe as the terminal
-        // going away: it terminates its clients with the documented code,
-        // and the session reaches end-of-file with no help from the
-        // child.
-        let mut sink = Vec::new();
-        reader
-            .read_to_end(&mut sink)
-            .expect("reading to end-of-file must succeed");
-        let status = child.wait().expect("waiting must succeed");
-        assert_eq!(
-            status.code(),
-            STATUS_CONTROL_C_EXIT,
-            "a child whose terminal went away must report \
-             STATUS_CONTROL_C_EXIT, got: {status}"
-        );
+        write_half_terminates_the_child_in(pty());
     });
+}
+
+#[test]
+fn dropping_the_write_half_terminates_a_forced_legacy_child() {
+    complete_within(
+        "dropping_the_write_half_terminates_a_forced_legacy_child",
+        || write_half_terminates_the_child_in(legacy_pty()),
+    );
+}
+
+fn write_half_terminates_the_child_in(pty: Pty) {
+    const MARKER: &str = "conpty-oxide-conin-drop-marker";
+
+    let mut child = Command::new("cmd.exe")
+        .spawn_in(&pty)
+        .expect("spawning must succeed");
+    let _controller = pty.controller();
+    let (mut reader, mut writer) = pty.into_split();
+
+    // First prove the child is attached and reading console input: an
+    // interactive `cmd.exe` cannot echo this line before it has done both.
+    writer
+        .write_all(format!("echo {MARKER}\r\n").as_bytes())
+        .expect("writing console input must succeed");
+    let mut seen = String::new();
+    let mut buf = [0u8; 4096];
+    while !seen.contains(MARKER) {
+        let read = reader.read(&mut buf).expect("reading must succeed");
+        assert_ne!(read, 0, "the session ended before the child started");
+        seen.push_str(&String::from_utf8_lossy(&buf[..read]));
+    }
+
+    drop(writer);
+
+    // Writer retirement closes conin and requests pseudoconsole close. The
+    // latter sends CTRL_CLOSE_EVENT portably, including on legacy Windows,
+    // while this reader remains available to drain the final output.
+    let mut sink = Vec::new();
+    reader
+        .read_to_end(&mut sink)
+        .expect("reading to end-of-file must succeed");
+    let status = child.wait().expect("waiting must succeed");
+    assert_eq!(
+        status.code(),
+        STATUS_CONTROL_C_EXIT,
+        "a child whose terminal went away must report \
+         STATUS_CONTROL_C_EXIT, got: {status}"
+    );
 }
 
 #[test]

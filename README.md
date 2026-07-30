@@ -10,7 +10,8 @@ blocking API and a Tokio one.
 
 ConPTY is easy to call and hard to survive: the documented teardown call can
 block forever, the output pipe never reaches end-of-file on older Windows,
-closing the input pipe kills the child instead of signalling it, and a bundled
+retiring input ends the terminal rather than signalling ordinary EOF, and a
+bundled
 `conpty.dll` paired with the wrong console host takes the process down. This
 crate treats those failure modes as the product — see
 [docs/conpty-pitfalls.md](docs/conpty-pitfalls.md) for the full catalogue with
@@ -45,9 +46,9 @@ bundle is consistent.
   (`ERROR_BROKEN_PIPE` and friends) are mapped to that same clean end-of-file.
   Old and new Windows reach it by different routes and behave identically.
 - **Teardown that cannot hang.** A state machine owns the `HPCON` and runs
-  `ClosePseudoConsole` exactly once, only in situations where it is proven not
-  to block indefinitely, and never on the thread that reads output. Dropping
-  the parts of a session in any order completes.
+  `ClosePseudoConsole` exactly once, inline only where it is proven prompt and
+  otherwise on a dedicated closer, never on the thread that reads output.
+  Dropping the parts of a session in any order completes.
 - **Kill the whole tree.** The child and every descendant join a job object
   assigned at creation time, so `Child::kill` terminates the tree rather than
   orphaning it. Managed sessions also ask the kernel to finish the job when
@@ -167,8 +168,8 @@ every caller:
    a full pipe buffer stops the host, and with it the child. Waiting for the
    child without reading its output deadlocks the session.
 2. **Keep the write half alive until the child exits.** Closing the input pipe
-   is not "no more input" — the console host reads it as the terminal being
-   closed and terminates its clients with `0xC000013A`.
+   is not "no more input" — the crate also requests pseudoconsole close, which
+   sends the terminal-close event and terminates clients with `0xC000013A`.
 
 Cursor inheritance, manual EOF policy, detached sessions, and pre-staged
 spawning are intentionally outside the 0.1 API. They may return later as typed

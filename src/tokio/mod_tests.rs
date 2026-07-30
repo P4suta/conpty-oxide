@@ -768,61 +768,70 @@ async fn reading_an_empty_buffer_is_not_end_of_file() {
 #[tokio::test]
 async fn shutting_down_the_write_half_ends_the_session() {
     complete_within("shutting_down_the_write_half_ends_the_session", async {
-        const MARKER: &str = "conpty-oxide-async-ready-marker";
-
-        let pty = pty();
-        let mut child = Command::new("cmd.exe")
-            .spawn_in(&pty)
-            .expect("spawning must succeed");
-        let controller = pty.controller();
-        let (mut reader, mut writer) = pty.into_split();
-
-        // Closing conin only ends a session that has a client to send the
-        // close event to, so the test first proves the child is attached
-        // and reading console input: `cmd.exe` cannot echo this line back
-        // before it has done both.
-        writer
-            .write_all(format!("echo {MARKER}\r\n").as_bytes())
-            .await
-            .expect("writing console input must succeed");
-        let mut seen = String::new();
-        let mut buf = [0u8; 4096];
-        while !seen.contains(MARKER) {
-            let read = reader.read(&mut buf).await.expect("reading must succeed");
-            assert_ne!(read, 0, "the session ended before the child started");
-            seen.push_str(&String::from_utf8_lossy(&buf[..read]));
-        }
-
-        writer.shutdown().await.expect("shutdown must succeed");
-        let err = writer
-            .write_all(b"exit\r\n")
-            .await
-            .expect_err("writing after a shutdown must fail");
-        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
-        // Shutting down twice is a no-op, not a second close.
-        writer
-            .shutdown()
-            .await
-            .expect("a repeated shutdown must succeed");
-
-        // The console host reads the closed input pipe as the terminal
-        // going away and terminates its clients with the documented code,
-        // so the session reaches end-of-file with no help from the child.
-        let mut sink = Vec::new();
-        reader
-            .read_to_end(&mut sink)
-            .await
-            .expect("reading to end-of-file must succeed");
-        let status = child.wait().await.expect("waiting must succeed");
-        assert_eq!(
-            status.code(),
-            STATUS_CONTROL_C_EXIT,
-            "a child whose terminal went away must report \
-             STATUS_CONTROL_C_EXIT, got: {status}"
-        );
-        drop(controller);
+        write_half_ends_the_session_in(pty()).await;
     })
     .await;
+}
+
+#[tokio::test]
+async fn shutting_down_the_write_half_ends_a_forced_legacy_session() {
+    complete_within(
+        "shutting_down_the_write_half_ends_a_forced_legacy_session",
+        write_half_ends_the_session_in(legacy_pty()),
+    )
+    .await;
+}
+
+async fn write_half_ends_the_session_in(pty: Pty) {
+    const MARKER: &str = "conpty-oxide-async-ready-marker";
+
+    let mut child = Command::new("cmd.exe")
+        .spawn_in(&pty)
+        .expect("spawning must succeed");
+    let controller = pty.controller();
+    let (mut reader, mut writer) = pty.into_split();
+
+    // First prove the child is attached and reading console input:
+    // `cmd.exe` cannot echo this line back before it has done both.
+    writer
+        .write_all(format!("echo {MARKER}\r\n").as_bytes())
+        .await
+        .expect("writing console input must succeed");
+    let mut seen = String::new();
+    let mut buf = [0u8; 4096];
+    while !seen.contains(MARKER) {
+        let read = reader.read(&mut buf).await.expect("reading must succeed");
+        assert_ne!(read, 0, "the session ended before the child started");
+        seen.push_str(&String::from_utf8_lossy(&buf[..read]));
+    }
+
+    writer.shutdown().await.expect("shutdown must succeed");
+    let err = writer
+        .write_all(b"exit\r\n")
+        .await
+        .expect_err("writing after a shutdown must fail");
+    assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    writer
+        .shutdown()
+        .await
+        .expect("a repeated shutdown must succeed");
+
+    // Writer retirement closes conin and requests pseudoconsole close. The
+    // latter sends CTRL_CLOSE_EVENT portably, including on legacy Windows,
+    // while this reader remains available to drain the final output.
+    let mut sink = Vec::new();
+    reader
+        .read_to_end(&mut sink)
+        .await
+        .expect("reading to end-of-file must succeed");
+    let status = child.wait().await.expect("waiting must succeed");
+    assert_eq!(
+        status.code(),
+        STATUS_CONTROL_C_EXIT,
+        "a child whose terminal went away must report \
+         STATUS_CONTROL_C_EXIT, got: {status}"
+    );
+    drop(controller);
 }
 
 #[tokio::test]

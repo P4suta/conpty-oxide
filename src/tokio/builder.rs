@@ -169,15 +169,11 @@ impl PtyBuilder {
         .map_err(Error::create_console)?;
 
         let shared = Arc::clone(console.shared());
-        // An async reader cannot promise that dropping it closes the conout
-        // read end at the OS level (see `ConoutReader`'s `Drop`); telling the
-        // lifecycle core up front keeps it from ever treating "reader closed"
-        // as a promptness proof for `ClosePseudoConsole`.
-        shared.set_reader_close_deferred();
+        let inner = Arc::new(SessionCore::new(console, self.options.eof_on_root_exit));
         Ok(Pty {
             reader: ConoutReader::new(conout, shared),
-            writer: ConinWriter::new(conin),
-            inner: Arc::new(SessionCore::new(console, self.options.eof_on_root_exit)),
+            writer: ConinWriter::new(conin, Arc::clone(&inner)),
+            inner,
         })
     }
 }
