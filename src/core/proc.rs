@@ -90,8 +90,8 @@ pub(super) struct SpawnedChild {
 /// closed its copies of the two client pipe ends) and the job object, and must
 /// afterwards drive the pseudoconsole lifecycle: call
 /// [`release_after_spawn`](crate::core::pseudocon::ConsoleShared::release_after_spawn)
-/// and, when it reports that the backend cannot release, start a legacy
-/// watcher with [`spawn_legacy_watcher`](crate::core::wait::spawn_legacy_watcher).
+/// and then start the managed root watcher with
+/// [`spawn_root_watcher`](crate::core::wait::spawn_root_watcher).
 ///
 /// Creation flags are `EXTENDED_STARTUPINFO_PRESENT |
 /// CREATE_UNICODE_ENVIRONMENT`. The Unicode flag is set even when the child

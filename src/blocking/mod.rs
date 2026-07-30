@@ -4,53 +4,46 @@
 
 //! Blocking pseudoconsole sessions.
 //!
-//! This is the synchronous front end of the crate. [`Command::spawn`] creates
-//! a managed [`Session`] for interactive I/O. After arranging for the root
-//! program to exit, [`Session::collect_output`] drains output concurrently and
-//! returns its status and remaining VT bytes.
+//! [`Command::spawn`] creates a managed [`Session`]. Choose one of three paths:
 //!
-//! # Service the output pipe from another thread
+//! - [`Session::wait`] when output is unnecessary;
+//! - [`Session::collect_output`] to retain the remaining raw VT bytes;
+//! - [`Session::into_parts`] for interactive or externally coordinated I/O.
 //!
-//! Microsoft's guidance for pseudoconsole sessions strongly recommends
-//! servicing each I/O channel on its own thread, and the deadlock that rule
-//! prevents is real: the console host writes rendered output eagerly; once
-//! the pipe buffer fills, the host — and with it the child — stops making
-//! progress. A program that spawns a child
-//! and then calls [`Child::wait`] without draining the output will hang as
-//! soon as the child produces more than a pipe buffer's worth of text.
+//! All three remain managed and root-bounded. `into_parts` separates ownership;
+//! it does not detach the child or its descendants.
 //!
-//! Use [`Session::into_parts`] to move [`OwnedReadHalf`] onto its own thread
-//! while retaining input, child, and resize/clear control.
+//! # Service output concurrently
 //!
-//! # Closing the input pipe ends the session
+//! [Microsoft's ConPTY guidance](https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session)
+//! recommends servicing conin and conout on separate threads. Once conout's pipe
+//! buffer fills, the console host and its client can stop making progress. A
+//! caller that blocks in [`Child::wait`] without another thread draining output
+//! can therefore deadlock.
 //!
-//! Dropping the write half of a session is **not** the console equivalent of
-//! closing a child's stdin. The crate closes conin and requests pseudoconsole
-//! close; the latter sends a close event to every attached client, which
-//! terminates them. A child killed this way reports exit code `0xC000013A`
-//! (`STATUS_CONTROL_C_EXIT`) and any output it had not flushed yet is lost.
+//! [`Session::wait`] and [`Session::collect_output`] perform the root wait and
+//! output drain together. With [`Session::into_parts`], move [`OwnedReadHalf`]
+//! to its own reader thread while retaining input, child, and resize/clear
+//! control elsewhere.
 //!
-//! Keep the write half — or the whole [`Session`] — alive until the child has
-//! exited. Dropping it earlier is a way to *stop* a session, not a way to
-//! signal one.
+//! # Input shutdown ends the session
 //!
-//! # The end-of-file contract
+//! Dropping [`OwnedWriteHalf`] is not the console equivalent of closing a
+//! child's stdin. It closes conin and requests pseudoconsole teardown, which
+//! sends a close event to attached clients. Keep input alive until the program
+//! exits through its own protocol.
 //!
-//! Reading a [`Session`] (or an [`OwnedReadHalf`]) returns `Ok(0)` exactly once
-//! the
-//! session is over, and every disconnect-flavoured OS error — most importantly
-//! `ERROR_BROKEN_PIPE` — is mapped to that same clean end-of-file rather than
-//! surfacing as an error. How the crate *reaches* that point depends on the
-//! backend:
+//! # Output and root completion
 //!
-//! - Where `ReleasePseudoConsole` exists (Windows 11 24H2 and later, or a
-//!   bundled `conpty.dll`), the pseudoconsole is released right after the
-//!   child is spawned. The console host then exits on its own once every
-//!   client has disconnected, and end-of-file arrives naturally.
-//! - Otherwise the console host outlives the child and nothing would ever end
-//!   the output stream. A Windows registered wait observes the root child;
-//!   after exit, a short-lived worker grants a drain grace and closes the
-//!   pseudoconsole.
+//! Conout is one raw UTF-8/VT byte stream; stdout and stderr are not separate,
+//! and this crate does not parse or decode it. Decode across reads because a
+//! UTF-8 code point or VT sequence may span chunks.
+//!
+//! Root exit bounds the managed session. A registered wait saves the root's
+//! real status and terminates remaining Job members. Released backends then
+//! reach EOF naturally. Legacy backends grant a drain grace and request close
+//! from a dedicated worker so the same output stream reaches EOF without
+//! running a potentially blocking close on the reader thread.
 //!
 //! # Examples
 //!
@@ -64,16 +57,14 @@
 //! use conpty_oxide::blocking::Command;
 //!
 //! # fn main() -> conpty_oxide::Result<()> {
-//! let output = Command::new("cmd.exe")
-//!     .args(["/c", "echo", "hello"])
+//! let status = Command::new("cmd.exe")
+//!     .args(["/c", "exit", "0"])
 //!     .spawn()?
-//!     .collect_output()?;
-//! print!("{}", String::from_utf8_lossy(output.as_bytes()));
-//! assert!(output.status().success());
+//!     .wait()?;
+//! assert!(status.success());
 //! # Ok(())
 //! # }
 //! ```
-
 mod builder;
 mod command;
 mod pty;

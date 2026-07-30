@@ -33,6 +33,12 @@ use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr;
 
+/// Exit code used when terminating a managed process tree.
+///
+/// Matches `std::process::Child::kill`, which passes `1` to
+/// `TerminateProcess`.
+pub(crate) const KILL_EXIT_CODE: u32 = 1;
+
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,

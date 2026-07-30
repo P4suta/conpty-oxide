@@ -12,6 +12,7 @@ use crate::core::session::{RootChild, KILL_EXIT_CODE};
 use crate::core::wait::ProcessWaiter;
 use crate::error::{Error, Result};
 use crate::status::ExitStatus;
+use std::sync::Arc;
 
 /// Runtime-independent ownership and state for a root child process.
 ///
@@ -20,7 +21,7 @@ use crate::status::ExitStatus;
 /// those semantics cannot drift between front ends.
 pub(crate) struct ChildCore {
     waiter: ProcessWaiter,
-    job: Job,
+    job: Arc<Job>,
     pid: u32,
     kill_on_drop: bool,
     status: Option<ExitStatus>,

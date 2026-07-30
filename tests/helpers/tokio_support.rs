@@ -301,7 +301,7 @@ pub struct Session {
 }
 
 impl Session {
-    /// Spawns `command` in a fresh 24x80 session.
+    /// Spawns `command` in a fresh 80x24 session.
     pub fn start(command: &mut Command) -> Self {
         Self::start_with(command, SessionOptions::default())
     }

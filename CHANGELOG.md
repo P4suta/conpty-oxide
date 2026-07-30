@@ -20,8 +20,12 @@ with Cargo's additional pre-1.0 compatibility rules.
   Windows pseudoconsole sessions.
 - A symmetric Tokio API with cancellation-safe managed session ownership and
   asynchronous named-pipe I/O.
-- Root-bounded output collection that drains while the root runs, preserves its
-  real exit status, and terminates descendants that outlive it.
+- Root-bounded managed completion that drains while the root runs, preserves
+  its real exit status, and terminates descendants that outlive it, including
+  after splitting a session into owned parts.
+- Consume-style blocking and Tokio `Session::wait` operations that safely drain
+  and discard output without an unbounded collection buffer.
+- Columns-first `Size::try_new(columns, rows)` terminal dimensions.
 - Process-tree termination through a Job object assigned atomically at child
   creation.
 - Consistent collection, end-of-file, and teardown behavior on Windows 10 1809

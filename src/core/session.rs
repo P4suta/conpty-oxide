@@ -21,13 +21,13 @@
 //! 2. `ReleasePseudoConsole`, immediately afterwards. This hands the console
 //!    host its own lifetime back so it exits when its last client disconnects
 //!    — which is what makes the output pipe reach end-of-file naturally.
-//! 3. Only if the release did not happen (old Windows, or a failed call),
-//!    register the legacy process wait that forces end-of-file after the root
-//!    child exits.
+//! 3. Register a root wait for every backend. When the root exits it terminates
+//!    remaining Job members; on a legacy backend it additionally requests
+//!    pseudoconsole close after the drain grace so output reaches EOF.
 //!
-//! Doing 2 before 1 would release a console that has no client yet; skipping 3
-//! on a legacy backend would leave a reader waiting for an end-of-file that
-//! can never arrive.
+//! Doing 2 before 1 would release a console that has no client yet. Skipping 3
+//! would violate the managed session's root-bounded process-tree and EOF
+//! contract.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,18 +36,12 @@ use std::sync::Arc;
 use crate::backend::BackendKind;
 use crate::command::Command;
 use crate::core::job::Job;
+pub(crate) use crate::core::job::KILL_EXIT_CODE;
 use crate::core::proc::{self, SpawnedChild};
 use crate::core::pseudocon::PseudoConsole;
-use crate::core::wait::{spawn_legacy_watcher, ProcessWaiter, LEGACY_CLOSE_GRACE};
+use crate::core::wait::{spawn_root_watcher, ProcessWaiter, LEGACY_CLOSE_GRACE};
 use crate::error::{Error, Result};
 use crate::size::Size;
-
-/// Exit code reported for a process tree terminated by a front end's
-/// `Child::kill`.
-///
-/// Matches `std::process::Child::kill`, which passes `1` to
-/// `TerminateProcess`.
-pub(crate) const KILL_EXIT_CODE: u32 = 1;
 
 /// Capability name reported with [`crate::ErrorKind::UnsupportedFeature`] when the backend
 /// cannot clear the pseudoconsole.
@@ -158,7 +152,7 @@ pub(crate) struct RootChild {
     /// Exit detection for the root process itself.
     pub(super) waiter: ProcessWaiter,
     /// The job object the child and all its descendants belong to.
-    pub(super) job: Job,
+    pub(super) job: Arc<Job>,
     /// The root child's process identifier.
     pub(super) pid: u32,
     /// Whether the front end's `Child::drop` should terminate the tree.
@@ -173,7 +167,7 @@ pub(crate) struct RootChild {
 /// [`io::ErrorKind::AlreadyExists`] source. A spawn that fails before the
 /// child process exists leaves the session reusable, because nothing was
 /// attached to the pseudoconsole and no watcher ran. The one failure past
-/// that point — arming the legacy watcher — terminates the child and retires
+/// that point — arming the root watcher — terminates the child and retires
 /// the session for good: a child was already attached, so later spawns keep
 /// failing with `AlreadyExists`.
 ///
@@ -223,20 +217,17 @@ pub(crate) fn spawn_root(
         },
     };
 
-    // Step three, only for sessions that could not be released: force
-    // end-of-file when the root child exits.
-    if should_arm_legacy_watcher(released, session.eof_on_root_exit) {
-        if let Err(err) = arm_legacy_watcher(session, &spawned) {
-            // A legacy session without a watcher could never reach
-            // end-of-file, so this is fatal. Terminate the child rather than
-            // return a session that can never finish; `spawned` deliberately
-            // stays `true`, because a child was attached to the pseudoconsole
-            // — the session is retired, not reusable.
-            if let Err(kill_err) = job.terminate(KILL_EXIT_CODE) {
-                log_spawn_cleanup_failure(&kill_err);
-            }
-            return Err(spawn_error(command, err));
+    // Step three for every backend: root exit bounds the whole managed tree.
+    // Legacy sessions additionally use this registration to force EOF.
+    let close_legacy = should_close_legacy_on_root_exit(released, session.eof_on_root_exit);
+    if let Err(err) = arm_root_watcher(session, &spawned, &job, close_legacy) {
+        // A session without a root watcher cannot uphold its managed lifecycle
+        // contract. Terminate the child rather than return it; `spawned`
+        // deliberately stays `true`, because the session is now retired.
+        if let Err(kill_err) = job.terminate(KILL_EXIT_CODE) {
+            log_spawn_cleanup_failure(&kill_err);
         }
+        return Err(spawn_error(command, err));
     }
 
     Ok(RootChild {
@@ -247,12 +238,12 @@ pub(crate) fn spawn_root(
     })
 }
 
-/// Returns whether this session needs the root-exit watcher that forces EOF.
+/// Returns whether the root watcher must force legacy EOF after killing the tree.
 ///
 /// Keeping the two independent conditions explicit and truth-table tested is
 /// important: released sessions reach EOF naturally, while opting out on a
 /// legacy session deliberately leaves the reader open after root exit.
-const fn should_arm_legacy_watcher(released: bool, eof_on_root_exit: bool) -> bool {
+const fn should_close_legacy_on_root_exit(released: bool, eof_on_root_exit: bool) -> bool {
     !released && eof_on_root_exit
 }
 
@@ -261,25 +252,32 @@ fn create_child(
     session: &Session,
     command: &Command,
     kill_on_drop: bool,
-) -> io::Result<(Job, SpawnedChild)> {
-    let job = Job::create(kill_on_drop)?;
+) -> io::Result<(Arc<Job>, SpawnedChild)> {
+    let job = Arc::new(Job::create(kill_on_drop)?);
     let spawned = proc::spawn(command, session.console.hpcon(), &job)?;
     Ok((job, spawned))
 }
 
-/// Starts the watcher that forces end-of-file after the root child exits.
+/// Starts the watcher that bounds the managed tree and, when needed, forces EOF.
 ///
 /// The watcher gets its own duplicate of the process handle so it is
 /// independent of the `Child` the caller receives — which may be dropped long
 /// before the child exits.
-fn arm_legacy_watcher(session: &Session, spawned: &SpawnedChild) -> io::Result<()> {
+fn arm_root_watcher(
+    session: &Session,
+    spawned: &SpawnedChild,
+    job: &Arc<Job>,
+    close_legacy: bool,
+) -> io::Result<()> {
     use std::os::windows::io::AsHandle;
 
     let watched = spawned.process.as_handle().try_clone_to_owned()?;
-    spawn_legacy_watcher(
+    spawn_root_watcher(
         watched,
+        Arc::downgrade(job),
         Arc::clone(session.console.shared()),
         LEGACY_CLOSE_GRACE,
+        close_legacy,
     )
 }
 
@@ -310,7 +308,7 @@ const fn log_release_failure(_err: &io::Error) {}
 fn log_spawn_cleanup_failure(err: &io::Error) {
     tracing::error!(
         error = %err,
-        "failed to terminate a child after legacy watcher setup failed"
+        "failed to terminate a child after root watcher setup failed"
     );
 }
 
@@ -325,7 +323,7 @@ mod tests {
     #[cfg(any(feature = "blocking", feature = "tokio"))]
     use std::sync::atomic::Ordering;
 
-    use super::should_arm_legacy_watcher;
+    use super::should_close_legacy_on_root_exit;
     #[cfg(feature = "tracing")]
     use super::{log_release_failure, log_spawn_cleanup_failure};
 
@@ -339,11 +337,11 @@ mod tests {
     use crate::size::Size;
 
     #[test]
-    fn legacy_watcher_requires_both_legacy_mode_and_eof_policy() {
-        assert!(should_arm_legacy_watcher(false, true));
-        assert!(!should_arm_legacy_watcher(false, false));
-        assert!(!should_arm_legacy_watcher(true, true));
-        assert!(!should_arm_legacy_watcher(true, false));
+    fn legacy_close_requires_both_legacy_mode_and_eof_policy() {
+        assert!(should_close_legacy_on_root_exit(false, true));
+        assert!(!should_close_legacy_on_root_exit(false, false));
+        assert!(!should_close_legacy_on_root_exit(true, true));
+        assert!(!should_close_legacy_on_root_exit(true, false));
     }
 
     #[cfg(any(feature = "blocking", feature = "tokio"))]

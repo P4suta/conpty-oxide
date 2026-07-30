@@ -11,7 +11,7 @@ pub mod helpers;
 use conpty_oxide::{SessionOptions, Size};
 
 fn size(rows: u16, cols: u16) -> Size {
-    Size::try_new(rows, cols).expect("test dimensions must be valid")
+    Size::try_new(cols, rows).expect("test dimensions must be valid")
 }
 
 #[cfg(feature = "blocking")]

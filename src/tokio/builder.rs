@@ -22,7 +22,7 @@ use super::pty::{ConinWriter, ConoutReader};
 /// Builder for an asynchronous [`Pty`].
 ///
 /// Created by [`Pty::builder`]. Every option has a working default, so
-/// `Pty::builder().build()` is a complete 24x80 session using automatic backend detection.
+/// `Pty::builder().build()` is a complete 80x24 session using automatic backend detection.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PtyBuilder {
     options: PtyOptions,

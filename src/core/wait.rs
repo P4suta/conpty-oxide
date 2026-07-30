@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Child-process exit detection and the legacy shutdown wait.
+//! Child-process exit detection and managed root-exit shutdown.
 //!
 //! Exit detection is handle-based. Blocking waits use [`ProcessWaiter`] and
 //! `WaitForSingleObject`; the Tokio frontend uses `RegisteredWait` and
@@ -11,13 +11,11 @@
 //! "succeeds" with `STILL_ACTIVE` (259), indistinguishable from a real exit
 //! code of 259, so the ordering is the protocol.
 //!
-//! The other half of this module is the **legacy shutdown registration**
-//! ([`spawn_legacy_watcher`]): on Windows versions without
-//! `ReleasePseudoConsole`, the console host outlives the child, so the conout
-//! pipe never reaches end-of-file on its own. Windows waits without parking a
-//! crate thread; after exit, a short-lived worker grants the reader a drain
-//! grace and asks the lifecycle state machine to close the pseudoconsole from
-//! a non-reader thread. That breaks conout and surfaces as EOF.
+//! The other half is [`spawn_root_watcher`]. Every managed session registers
+//! it so root exit terminates descendants still in the session Job. On Windows
+//! versions without `ReleasePseudoConsole`, the console host also outlives the
+//! process tree, so the post-exit worker grants the reader a drain grace and
+//! requests pseudoconsole close from a non-reader thread to produce EOF.
 
 use std::ffi::c_void;
 #[cfg(feature = "tokio")]
@@ -46,6 +44,7 @@ use windows_sys::Win32::System::Threading::{
     INFINITE, WT_EXECUTELONGFUNCTION, WT_EXECUTEONLYONCE,
 };
 
+use crate::core::job::{Job, KILL_EXIT_CODE};
 use crate::core::pseudocon::ConsoleShared;
 
 /// Default drain grace between child exit and the legacy close.
@@ -472,69 +471,67 @@ fn log_unregister_failure_inner(err: &io::Error) {
 #[cfg(not(feature = "tracing"))]
 const fn log_unregister_failure_inner(_err: &io::Error) {}
 
-/// Spawns the legacy shutdown watcher for one session.
+/// Spawns the managed root-exit watcher for one session.
 ///
-/// `process` must be a *duplicate* of the child's process handle (e.g. from
-/// `BorrowedHandle::try_clone_to_owned`, which wraps `DuplicateHandle` with
-/// `DUPLICATE_SAME_ACCESS`), so the watcher's wait is independent of the
-/// lifetime of the handle the caller keeps for its own `wait`/`kill` API.
+/// `process` must be a duplicate of the child's process handle, so the watcher
+/// is independent of the public handle kept for `wait` and status reporting.
 ///
 /// The registered wait and its post-exit worker:
 ///
-/// 1. Windows waits for the child in its wait pool. No crate thread is parked
-///    for the lifetime of the process. Only a `Weak` reference to the
-///    lifecycle core is retained, so an abandoned session can still reach
-///    [`ConsoleShared`]'s final-defense drop.
-/// 2. After process exit, a short-lived worker sleeps for `grace` (skipped
-///    when the reader is already done) to let
-///    the reader drain output the console host produced before the exit.
-/// 3. Calls [`ConsoleShared::request_close`]. The post-exit worker satisfies
-///    that method's contract — a dedicated, non-reader thread that may
-///    block — and the close breaks the conout pipe, which the reader
-///    observes as end-of-file.
+/// 1. Windows waits in its wait pool, so no crate thread is parked while the
+///    root lives. Weak Job and lifecycle references preserve ordinary
+///    kill-on-close and final-defense close semantics.
+/// 2. After root exit, a short-lived worker terminates remaining Job members.
+///    The root is already signaled, so its actual status remains available.
+/// 3. On a legacy backend, that worker lets the reader drain for `grace`, then
+///    calls [`ConsoleShared::request_close`] from a dedicated non-reader thread.
 ///
-/// If the session is already released, no wait is registered: end-of-file
-/// arrives naturally and closing is handled by the reader-side transitions.
+/// Released sessions still register the wait for tree termination, but skip
+/// the legacy close step and reach EOF naturally after clients disconnect.
 ///
 /// # Errors
 ///
 /// Returns the OS error if `RegisterWaitForSingleObject` fails. Failure to
 /// create the post-exit worker is handled inside the registered callback,
 /// which performs the grace and close work itself.
-pub(super) fn spawn_legacy_watcher(
+pub(super) fn spawn_root_watcher(
     process: OwnedHandle,
+    job: Weak<Job>,
     shared: Arc<ConsoleShared>,
     grace: Duration,
+    close_legacy: bool,
 ) -> io::Result<()> {
-    spawn_legacy_watcher_inner(process, shared, grace, true)
+    spawn_root_watcher_inner(process, job, shared, grace, close_legacy, true)
 }
 
 #[cfg(test)]
-fn spawn_legacy_watcher_with_worker_spawn_failure(
+fn spawn_root_watcher_with_worker_spawn_failure(
     process: OwnedHandle,
+    job: Weak<Job>,
     shared: Arc<ConsoleShared>,
     grace: Duration,
+    close_legacy: bool,
 ) -> io::Result<()> {
-    spawn_legacy_watcher_inner(process, shared, grace, false)
+    spawn_root_watcher_inner(process, job, shared, grace, close_legacy, false)
 }
 
-fn spawn_legacy_watcher_inner(
+fn spawn_root_watcher_inner(
     process: OwnedHandle,
+    job: Weak<Job>,
     shared: Arc<ConsoleShared>,
     grace: Duration,
+    close_legacy: bool,
     spawn_close_worker: bool,
 ) -> io::Result<()> {
-    if shared.is_released() {
-        return Ok(());
-    }
-
     let weak = Arc::downgrade(&shared);
     drop(shared);
 
     let context = Box::into_raw(Box::new(LegacyWaitContext {
         process: ProcessWaiter::new(process),
+        job,
         shared: weak,
         grace,
+        close_legacy,
         spawn_close_worker,
         wait_object: Mutex::new(None),
         wait_object_ready: Condvar::new(),
@@ -581,8 +578,10 @@ fn spawn_legacy_watcher_inner(
 struct LegacyWaitContext {
     /// Keeps the duplicated process handle live for the registered wait.
     process: ProcessWaiter,
+    job: Weak<Job>,
     shared: Weak<ConsoleShared>,
     grace: Duration,
+    close_legacy: bool,
     /// `false` only in the crate-local failure-injection test.
     spawn_close_worker: bool,
     wait_object: Mutex<Option<HANDLE>>,
@@ -629,7 +628,7 @@ unsafe fn legacy_wait_callback_inner(raw: *mut c_void) {
             .name("conpty-oxide-legacy-close".into())
             .spawn(move || {
                 // SAFETY: ownership of cleanup was transferred to this worker.
-                unsafe { finish_legacy_wait(&worker_pointer) };
+                unsafe { finish_root_wait(&worker_pointer) };
             })
     } else {
         Err(io::Error::other(
@@ -643,7 +642,7 @@ unsafe fn legacy_wait_callback_inner(raw: *mut c_void) {
         // work itself. It cannot use blocking UnregisterWaitEx from inside its
         // own callback, so request nonblocking unregistration and retain the
         // context: freeing it before this callback returns would be unsound.
-        finish_legacy_close(context);
+        finish_root_exit(context);
         let wait_object = legacy_wait_object(context);
         // SAFETY: the wait object belongs to this registration. A null
         // completion event is the callback-safe, nonblocking form.
@@ -659,10 +658,10 @@ unsafe fn legacy_wait_callback_inner(raw: *mut c_void) {
 /// `pointer` must name the live context for the current registration, and the
 /// calling worker
 /// function must be its sole cleanup owner.
-unsafe fn finish_legacy_wait(pointer: &LegacyContextPtr) {
+unsafe fn finish_root_wait(pointer: &LegacyContextPtr) {
     // SAFETY: guaranteed by this function's contract.
     let context = unsafe { &*pointer.0 };
-    finish_legacy_close(context);
+    finish_root_exit(context);
     let wait_object = legacy_wait_object(context);
     // SAFETY: this worker is not the registered callback. The blocking form
     // waits until that callback returns before permitting the context to free.
@@ -676,7 +675,15 @@ unsafe fn finish_legacy_wait(pointer: &LegacyContextPtr) {
     }
 }
 
-fn finish_legacy_close(context: &LegacyWaitContext) {
+fn finish_root_exit(context: &LegacyWaitContext) {
+    if let Some(job) = context.job.upgrade() {
+        if let Err(err) = job.terminate(KILL_EXIT_CODE) {
+            log_root_watcher_kill_failure(&err);
+        }
+    }
+    if !context.close_legacy {
+        return;
+    }
     let Some(shared) = context.shared.upgrade() else {
         return;
     };
@@ -705,6 +712,23 @@ fn legacy_wait_object(context: &LegacyWaitContext) -> HANDLE {
             .unwrap_or_else(PoisonError::into_inner);
     }
 }
+
+fn log_root_watcher_kill_failure(err: &io::Error) {
+    let _contained = catch_callback_unwind(|| {
+        log_root_watcher_kill_failure_inner(err);
+    });
+}
+
+#[cfg(feature = "tracing")]
+fn log_root_watcher_kill_failure_inner(err: &io::Error) {
+    tracing::error!(
+        error = %err,
+        "failed to terminate the managed Job after root process exit"
+    );
+}
+
+#[cfg(not(feature = "tracing"))]
+const fn log_root_watcher_kill_failure_inner(_err: &io::Error) {}
 
 fn log_legacy_worker_failure(err: &io::Error) {
     let _contained = catch_callback_unwind(|| {

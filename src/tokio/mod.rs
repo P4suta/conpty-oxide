@@ -4,66 +4,50 @@
 
 //! Asynchronous pseudoconsole sessions, driven by Tokio.
 //!
-//! This is the async front end of the crate and a faithful mirror of the
-//! `blocking` module. [`Command::spawn`] creates a managed [`Session`] for
-//! interactive I/O. After arranging for the root program to exit,
-//! [`Session::collect_output`] drains output concurrently and returns its
-//! status and remaining VT bytes.
+//! [`Command::spawn`] creates a managed [`Session`]. Choose one of three paths:
 //!
-//! [`Session::into_parts`] provides independent owned I/O, child, and control
-//! handles. [`Child::wait`] uses
-//! `RegisterWaitForSingleObject`, so no Tokio blocking-pool thread remains
-//! parked while the process is alive.
+//! - [`Session::wait`] when output is unnecessary;
+//! - [`Session::collect_output`] to retain the remaining raw VT bytes;
+//! - [`Session::into_parts`] for interactive or externally coordinated I/O.
+//!
+//! All three remain managed and root-bounded. `into_parts` separates ownership;
+//! it does not detach the child or its descendants.
 //!
 //! # Build inside a runtime
 //!
-//! [`Command::spawn`] registers the session's pipes with the current runtime's
-//! I/O driver, so it must be called from within a Tokio runtime.
+//! [`Command::spawn`] registers the session pipes with the current runtime's I/O
+//! driver, so it must be called from within a Tokio runtime. [`Child::wait`]
+//! uses `RegisterWaitForSingleObject`; it does not park a Tokio blocking thread.
 //!
-//! # Drive the output pipe concurrently with the child
+//! # Drive output concurrently
 //!
-//! Microsoft's guidance for pseudoconsole sessions strongly recommends
-//! servicing each I/O channel on its own thread — here, by something other
-//! than whatever is waiting on the child. The deadlock that rule prevents is
-//! real: the console host writes rendered output eagerly; once the pipe
-//! buffer fills, the host — and with it the child — stops making progress.
+//! [Microsoft's ConPTY guidance](https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session)
+//! recommends servicing conin and conout concurrently. Once conout's pipe buffer
+//! fills, the console host and its client can stop making progress. Awaiting
+//! [`Child::wait`] without also polling output can therefore deadlock.
 //!
-//! Async makes this easier than threads do, but it does not make it optional:
-//! a task that awaits [`Child::wait`] without also polling the output will
-//! hang as soon as the child produces more than a pipe buffer's worth of text.
-//! Use [`Session::into_parts`] to hand the read half to its own task, or
-//! `tokio::select!`/`tokio::join!` to drive both from one.
+//! [`Session::wait`] and [`Session::collect_output`] poll the root wait and
+//! output together. With [`Session::into_parts`], hand [`OwnedReadHalf`] to a
+//! reader task or use `tokio::select!`/`tokio::join!`.
 //!
-//! # Closing the input pipe ends the session
+//! # Input shutdown ends the session
 //!
-//! Dropping the write half of a session is **not** the console equivalent of
-//! closing a child's stdin. The crate closes conin and requests pseudoconsole
-//! close; the latter sends a close event to every attached client, which
-//! terminates them. A child killed this way reports exit code `0xC000013A`
-//! (`STATUS_CONTROL_C_EXIT`) and any output it had not flushed yet is lost.
-//! The same is true of `AsyncWriteExt::shutdown`.
+//! Dropping or shutting down [`OwnedWriteHalf`] is not the console equivalent
+//! of closing a child's stdin. It closes conin and requests pseudoconsole
+//! teardown, which sends a close event to attached clients. Keep input alive
+//! until the program exits through its own protocol.
 //!
-//! Keep the write half — or the whole [`Session`] — alive until the child has
-//! exited. Dropping it earlier is a way to *stop* a session, not a way to
-//! signal one.
+//! # Output and root completion
 //!
-//! # The end-of-file contract
+//! Conout is one raw UTF-8/VT byte stream; stdout and stderr are not separate,
+//! and this crate does not parse or decode it. Decode across reads because a
+//! UTF-8 code point or VT sequence may span chunks.
 //!
-//! Reading a [`Session`] (or an [`OwnedReadHalf`]) yields `Ok(0)` exactly once
-//! the
-//! session is over, and every disconnect-flavoured OS error — most importantly
-//! `ERROR_BROKEN_PIPE` — is mapped to that same clean end-of-file rather than
-//! surfacing as an error. How the crate *reaches* that point depends on the
-//! backend, exactly as it does for the blocking front end:
-//!
-//! - Where `ReleasePseudoConsole` exists (Windows 11 24H2 and later, or a
-//!   bundled `conpty.dll`), the pseudoconsole is released right after the
-//!   child is spawned. The console host then exits on its own once every
-//!   client has disconnected, and end-of-file arrives naturally.
-//! - Otherwise the console host outlives the child and nothing would ever end
-//!   the output stream. A Windows registered wait observes the root child;
-//!   after exit, a short-lived worker grants a drain grace and closes the
-//!   pseudoconsole.
+//! Root exit bounds the managed session. A registered wait saves the root's
+//! real status and terminates remaining Job members. Released backends then
+//! reach EOF naturally. Legacy backends grant a drain grace and request close
+//! from a dedicated worker, giving both backends the same completion meaning.
+//! Cancelling a future that owns a managed session terminates its process tree.
 //!
 //! # Examples
 //!
@@ -78,17 +62,15 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> conpty_oxide::Result<()> {
-//! let output = Command::new("cmd.exe")
-//!     .args(["/c", "echo", "hello"])
+//! let status = Command::new("cmd.exe")
+//!     .args(["/c", "exit", "0"])
 //!     .spawn()?
-//!     .collect_output()
+//!     .wait()
 //!     .await?;
-//! print!("{}", String::from_utf8_lossy(output.as_bytes()));
-//! assert!(output.status().success());
+//! assert!(status.success());
 //! # Ok(())
 //! # }
 //! ```
-
 mod builder;
 mod command;
 mod pty;

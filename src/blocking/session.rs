@@ -20,10 +20,9 @@ use crate::{PtyController, SessionOutput};
 /// A managed blocking pseudoconsole session.
 ///
 /// Reading and writing delegate to the session's output and input streams.
-/// There is deliberately no `wait` method: waiting without draining output can
-/// deadlock once the pipe fills. Use [`Session::collect_output`] after arranging
-/// for the root process to exit, or [`Session::into_parts`] for independently
-/// coordinated I/O and waiting.
+/// [`Session::wait`] drains and discards output concurrently, while
+/// [`Session::collect_output`] retains it. Use [`Session::into_parts`] for
+/// interactive or externally coordinated I/O.
 ///
 /// Dropping an unfinished managed session closes its kill-on-close Job and
 /// terminates the root process together with every descendant.
@@ -119,6 +118,25 @@ impl Session {
         self.controller.supports_clear()
     }
 
+    /// Waits for the root process while draining and discarding VT output.
+    ///
+    /// Output is drained on a dedicated thread, so a child that writes more
+    /// than the pipe capacity cannot deadlock. Once the root status is saved,
+    /// remaining descendants are terminated and the teardown tail is drained
+    /// to EOF without allocating an output-sized buffer.
+    ///
+    /// Terminal input remains open until the root exits. Closing input is
+    /// session teardown, not an ordinary stdin EOF signal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the reader thread cannot be created, output cannot
+    /// be drained, the root process status cannot be obtained, or the
+    /// remaining process tree cannot be terminated.
+    pub fn wait(self) -> Result<ExitStatus> {
+        Ok(self.complete(false)?.status())
+    }
+
     /// Waits for the root process while collecting the remaining VT output.
     ///
     /// Collection leaves terminal input open until the root exits, so the
@@ -134,19 +152,31 @@ impl Session {
     ///
     /// Bytes already read from this `Session` are not included.
     ///
+    /// Collection is unbounded and may allocate as much memory as the child
+    /// writes. Use [`Session::wait`] when output is unnecessary, or
+    /// [`Session::into_parts`] to process it as a stream.
+    ///
     /// # Errors
     ///
     /// Returns an error if the reader thread cannot be created, output cannot
     /// be drained, the root process status cannot be obtained, or the
     /// remaining process tree cannot be terminated.
     pub fn collect_output(self) -> Result<SessionOutput> {
+        self.complete(true)
+    }
+
+    fn complete(self, collect: bool) -> Result<SessionOutput> {
         let (completed_tx, completed_rx) = mpsc::sync_channel(1);
         let mut output = self.output;
         let reader = thread::Builder::new()
             .name("conpty-oxide-output".into())
             .spawn(move || {
-                let mut bytes = Vec::new();
-                let result = output.read_to_end(&mut bytes).map(|_| bytes);
+                let result = if collect {
+                    let mut bytes = Vec::new();
+                    output.read_to_end(&mut bytes).map(|_| bytes)
+                } else {
+                    io::copy(&mut output, &mut io::sink()).map(|_| Vec::new())
+                };
                 match completed_tx.send(()) {
                     Ok(()) | Err(_) => {},
                 }
@@ -165,6 +195,9 @@ impl Session {
 
     /// Decomposes this session for interactive or externally coordinated I/O.
     #[must_use]
+    /// Splitting changes ownership only: root exit still terminates remaining
+    /// descendants and advances output to EOF. It does not detach the session.
+    ///
     pub fn into_parts(self) -> SessionParts {
         SessionParts {
             child: self.child,

@@ -75,6 +75,7 @@ pub fn conpty_oxide::blocking::Session::resize(&self, conpty_oxide::Size) -> con
 pub fn conpty_oxide::blocking::Session::size(&self) -> conpty_oxide::Size
 pub fn conpty_oxide::blocking::Session::supports_clear(&self) -> bool
 pub fn conpty_oxide::blocking::Session::try_wait(&mut self) -> conpty_oxide::Result<core::option::Option<conpty_oxide::ExitStatus>>
+pub fn conpty_oxide::blocking::Session::wait(self) -> conpty_oxide::Result<conpty_oxide::ExitStatus>
 impl core::fmt::Debug for conpty_oxide::blocking::Session
 pub fn conpty_oxide::blocking::Session::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl std::io::Read for conpty_oxide::blocking::Session
