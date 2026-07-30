@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::fmt;
+use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -19,13 +20,14 @@ use super::{Child, OwnedReadHalf, OwnedWriteHalf};
 /// A managed asynchronous pseudoconsole session.
 ///
 /// There is deliberately no `wait` method: waiting without draining output
-/// can deadlock once the pipe fills. Use [`Session::wait_with_output`] for
-/// collection or [`Session::into_parts`] for interactive operation.
+/// can deadlock once the pipe fills. Use [`Session::collect_output`] after
+/// arranging for the root process to exit, or [`Session::into_parts`] for
+/// independently coordinated I/O and waiting.
 ///
 /// The managed child always has kill-on-drop and Job kill-on-close enabled.
 /// Dropping an unfinished `Session` therefore terminates the root process and
 /// every descendant. The same guarantee applies when a future that owns the
-/// session—most notably [`Session::wait_with_output`]—is cancelled.
+/// session—most notably [`Session::collect_output`]—is cancelled.
 pub struct Session {
     pub(super) child: Child,
     pub(super) output: OwnedReadHalf,
@@ -104,35 +106,58 @@ impl Session {
         self.controller.supports_clear()
     }
 
-    /// Drains output to EOF, then waits for the root process status.
+    /// Waits for the root process while collecting the remaining VT output.
     ///
-    /// The future owns the whole session. Cancelling it drops the managed
-    /// child and its kill-on-close Job, terminating the process tree.
+    /// Collection leaves terminal input open until the root exits, so the
+    /// caller must first arrange for the program to finish through its own
+    /// protocol. `ConPTY` has no ordinary stdin half-close: closing its input
+    /// is terminal teardown and could replace the real exit status.
+    ///
+    /// Output and the root wait are polled concurrently. Once the root status
+    /// is captured, any descendants still in the managed Job are terminated,
+    /// terminal input is retired, and the reader drains the teardown tail to
+    /// EOF. This gives released and legacy `ConPTY` backends the same finite,
+    /// root-bounded completion rule.
+    ///
+    /// Bytes already read from this `Session` are not included. The future
+    /// owns the whole session; cancelling it drops the managed child first and
+    /// terminates the process tree.
     ///
     /// # Errors
     ///
-    /// Returns an error if output cannot be drained or the root process
-    /// status cannot be obtained.
-    pub async fn wait_with_output(mut self) -> Result<SessionOutput> {
+    /// Returns an error if output cannot be drained, the root process status
+    /// cannot be obtained, or the remaining process tree cannot be
+    /// terminated.
+    pub async fn collect_output(mut self) -> Result<SessionOutput> {
         let mut bytes = Vec::new();
-        // Keep the returned future small enough to live comfortably in an
-        // executor task without forcing callers to box it. Output is drained
-        // incrementally either way; this buffer is backpressure plumbing, not
-        // a collection limit.
-        let mut chunk = [0_u8; 4096];
-        loop {
-            let read = {
-                let mut read_buf = ReadBuf::new(&mut chunk);
-                std::future::poll_fn(|cx| Pin::new(&mut self.output).poll_read(cx, &mut read_buf))
-                    .await?;
-                read_buf.filled().len()
-            };
-            if read == 0 {
-                break;
-            }
-            bytes.extend_from_slice(&chunk[..read]);
-        }
-        let status = self.child.wait().await?;
+        let (status, output_finished) =
+            collect_until_root(&mut self.child, &mut self.output, &mut bytes).await?;
+
+        // The root status is cached before this call, so terminating the Job
+        // now affects only descendants that outlived it.
+        let kill = self.child.kill();
+        let Self {
+            child,
+            mut output,
+            mut input,
+            controller,
+        } = self;
+        // Closing the last Job handle is the fallback if explicit termination
+        // failed. It must happen before input retirement and tail draining so
+        // a released console cannot remain held by a descendant.
+        drop(child);
+        let input_result = std::future::poll_fn(|cx| Pin::new(&mut input).poll_shutdown(cx)).await;
+        drop(input);
+        drop(controller);
+
+        let output_result = if output_finished {
+            Ok(())
+        } else {
+            drain_to_end(&mut output, &mut bytes).await
+        };
+        output_result?;
+        input_result?;
+        kill?;
         Ok(SessionOutput::new(status, bytes))
     }
 
@@ -145,6 +170,73 @@ impl Session {
             input: self.input,
             controller: self.controller,
         }
+    }
+}
+
+enum CollectionEvent {
+    Root(Result<ExitStatus>),
+    Output(io::Result<usize>),
+}
+
+async fn collect_until_root(
+    child: &mut Child,
+    output: &mut OwnedReadHalf,
+    bytes: &mut Vec<u8>,
+) -> Result<(ExitStatus, bool)> {
+    // Keep the returned public future small enough to live comfortably in an
+    // executor task. This fixed buffer is backpressure plumbing, not a
+    // collection limit.
+    let mut chunk = [0_u8; 4096];
+    let mut output_finished = false;
+    let mut wait = std::pin::pin!(child.wait());
+
+    let status = loop {
+        let event = std::future::poll_fn(|cx| {
+            if let Poll::Ready(status) = wait.as_mut().poll(cx) {
+                return Poll::Ready(CollectionEvent::Root(status));
+            }
+            if output_finished {
+                return Poll::Pending;
+            }
+
+            let mut read_buf = ReadBuf::new(&mut chunk);
+            match Pin::new(&mut *output).poll_read(cx, &mut read_buf) {
+                Poll::Ready(Ok(())) => {
+                    Poll::Ready(CollectionEvent::Output(Ok(read_buf.filled().len())))
+                },
+                Poll::Ready(Err(err)) => Poll::Ready(CollectionEvent::Output(Err(err))),
+                Poll::Pending => Poll::Pending,
+            }
+        })
+        .await;
+
+        match event {
+            CollectionEvent::Root(status) => break status?,
+            CollectionEvent::Output(Ok(0)) => output_finished = true,
+            CollectionEvent::Output(Ok(read)) => bytes.extend_from_slice(&chunk[..read]),
+            CollectionEvent::Output(Err(err)) => return Err(err.into()),
+        }
+    };
+
+    Ok((status, output_finished))
+}
+
+async fn drain_to_end(output: &mut OwnedReadHalf, bytes: &mut Vec<u8>) -> io::Result<()> {
+    let mut chunk = [0_u8; 4096];
+    loop {
+        let read = std::future::poll_fn(|cx| {
+            let mut read_buf = ReadBuf::new(&mut chunk);
+            match Pin::new(&mut *output).poll_read(cx, &mut read_buf) {
+                Poll::Ready(Ok(())) => Poll::Ready(Ok(read_buf.filled().len())),
+                Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+                Poll::Pending => Poll::Pending,
+            }
+        })
+        .await?;
+        if read == 0 {
+            return Ok(());
+        }
+        bytes.extend_from_slice(&chunk[..read]);
     }
 }
 

@@ -280,7 +280,7 @@ fn managed_session_reports_the_configured_bundle_clear_capability() {
 
     assert!(session.supports_clear());
     assert!(session
-        .wait_with_output()
+        .collect_output()
         .expect("the managed session must finish")
         .status()
         .success());
@@ -833,7 +833,9 @@ fn managed_output_drains_more_than_pipe_capacity() {
                 "/c",
                 "for /L %i in (1,1,6000) do @echo managed-output-%i-01234567890123456789",
             ])
-            .output()
+            .spawn()
+            .expect("managed spawning must succeed")
+            .collect_output()
             .expect("managed output must complete");
 
         assert!(output.status().success());
@@ -866,9 +868,53 @@ fn managed_output_keeps_input_open_until_the_real_exit() {
     complete_within("managed_output_keeps_input_open", || {
         let output = Command::new("cmd.exe")
             .raw_arg(r#"/d /q /c "ping -n 2 127.0.0.1 >nul & exit 42""#)
-            .output()
+            .spawn()
+            .expect("managed spawning must succeed")
+            .collect_output()
             .expect("managed output must complete");
         assert_eq!(output.status().code(), 42);
+    });
+}
+
+fn assert_root_bounded_collection(backend: ConPtyBackend) {
+    const MARKER: &str = "blocking-root-bounded-tail";
+
+    let options = crate::SessionOptions::new().backend(backend);
+    let mut session = Command::new("cmd.exe")
+        .args(["/d", "/q"])
+        .spawn_with(options)
+        .expect("managed spawning must succeed");
+    session
+        .write_all(
+            format!("start \"\" /b ping -t 127.0.0.1 >nul & echo {MARKER} & exit /b 23\r\n")
+                .as_bytes(),
+        )
+        .expect("the root command must reach the session");
+
+    let output = session
+        .collect_output()
+        .expect("root-bounded collection must finish");
+    assert_eq!(output.status().code(), 23);
+    assert!(
+        String::from_utf8_lossy(output.as_bytes()).contains(MARKER),
+        "the root's teardown tail must be preserved"
+    );
+}
+
+#[test]
+fn managed_collection_has_the_same_root_boundary_on_both_lifecycles() {
+    complete_within("managed_collection_root_boundary", || {
+        let system = ConPtyBackend::system().expect("ConPTY must be available");
+        assert_root_bounded_collection(system.without_release());
+        assert_root_bounded_collection(system);
+
+        #[cfg(not(target_arch = "x86"))]
+        if let Some(dir) = std::env::var_os("CONPTY_OXIDE_TEST_DLL_DIR") {
+            let bundle =
+                ConPtyBackend::from_dir(dir).expect("the configured standalone backend must load");
+            assert!(bundle.supports_release());
+            assert_root_bounded_collection(bundle);
+        }
     });
 }
 
@@ -899,7 +945,9 @@ fn command_builder_delegates_every_configuration_category() {
                 .kill_on_drop(false);
 
             let output = command
-                .output()
+                .spawn()
+                .expect("managed spawning must succeed")
+                .collect_output()
                 .expect("the fully configured command must complete");
             assert!(output.status().success());
             let text = String::from_utf8_lossy(output.as_bytes());
@@ -987,8 +1035,9 @@ fn low_level_pty_and_borrowed_halves_delegate_io() {
 #[test]
 fn managed_session_try_wait_reports_a_completed_child() {
     complete_within("managed_session_try_wait_reports_a_completed_child", || {
+        const MARKER: &str = "blocking-completed-root-tail";
         let mut session = Command::new("cmd.exe")
-            .args(["/c", "exit", "23"])
+            .raw_arg(format!(r#"/d /q /c "echo {MARKER} & exit /b 23""#))
             .spawn()
             .expect("managed spawning must succeed");
         let expected = session
@@ -1004,9 +1053,13 @@ fn managed_session_try_wait_reports_a_completed_child() {
         );
 
         let output = session
-            .wait_with_output()
+            .collect_output()
             .expect("draining the completed managed session must succeed");
         assert_eq!(output.status(), expected);
+        assert!(
+            String::from_utf8_lossy(output.as_bytes()).contains(MARKER),
+            "output buffered after root completion must still be drained"
+        );
     });
 }
 

@@ -18,6 +18,7 @@
 
 pub mod helpers;
 
+use std::io::Write;
 use std::time::Duration;
 
 use conpty_oxide::blocking::Command;
@@ -135,5 +136,36 @@ fn dropping_the_child_from_managed_parts_terminates_the_whole_tree() {
         drop(parts.output);
         drop(parts.input);
         drop(parts.controller);
+    });
+}
+
+#[test]
+fn collecting_output_is_bounded_by_the_root_process() {
+    with_timeout(BUDGET, || {
+        const MARKER: &str = "root-bounded-blocking-tail";
+
+        let mut session = Command::new(ROOT_EXE)
+            .args(["/d", "/q"])
+            .spawn()
+            .expect("managed spawning must succeed");
+        let root = session.id();
+        session
+            .write_all(
+                format!("start \"\" /b ping -t 127.0.0.1 >nul & echo {MARKER} & exit /b 23\r\n")
+                    .as_bytes(),
+            )
+            .expect("the root command must reach the session");
+
+        let grandchild = wait_for_descendant(root, GRANDCHILD_EXE, APPEAR);
+        let output = session
+            .collect_output()
+            .expect("root-bounded collection must complete");
+
+        assert_eq!(output.status().code(), 23);
+        assert!(
+            String::from_utf8_lossy(output.as_bytes()).contains(MARKER),
+            "the root's teardown tail must be preserved"
+        );
+        assert_tree_terminated(root, grandchild);
     });
 }

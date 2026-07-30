@@ -13,6 +13,10 @@ name: Release-plz
 
 permissions: {}
 
+concurrency:
+  group: release-plz-main
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Publish pending crate
@@ -48,7 +52,19 @@ jobs:
           APP_CLIENT_ID: ${{ vars.RELEASE_PLZ_APP_CLIENT_ID }}
           APP_PRIVATE_KEY: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
           BOOTSTRAP_CARGO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          RELEASE_ENABLED: ${{ vars.RELEASE_ENABLED }}
         run: |
+          if [[ -n "$RELEASE_ENABLED" && "$RELEASE_ENABLED" != "true" && "$RELEASE_ENABLED" != "false" ]]; then
+            echo "::error::RELEASE_ENABLED must be exactly 'true' or 'false'."
+            exit 1
+          fi
+          if [[ "$RELEASE_ENABLED" == "true" ]]; then
+            echo "publish_enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Crate publication is disabled by the release Environment gate."
+            echo "publish_enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
           if [[ -z "$APP_CLIENT_ID" || -z "$APP_PRIVATE_KEY" ]]; then
             echo "::notice::Release automation is dormant until the release environment secret is configured."
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -83,12 +99,23 @@ jobs:
           [[ "$APP_SLUG" == "p4suta-release-plz" ]]
           [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq '.full_name')" == "$GITHUB_REPOSITORY" ]]
 
-      - name: Check out the tested main commit
+      - name: Derive the tested main commit
+        id: tested
+        if: steps.preflight.outputs.ready == 'true'
+        shell: bash
+        env:
+          TESTED_SHA: >-
+            ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$TESTED_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check out main as an attached branch
         if: steps.preflight.outputs.ready == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          ref: >-
-            ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          ref: main
           fetch-depth: 0
           persist-credentials: false
           token: ${{ steps.app-token.outputs.token }}
@@ -99,12 +126,76 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Require the tested commit to still be current attached main
+        id: freshness
+        if: steps.preflight.outputs.ready == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TESTED_SHA: ${{ steps.tested.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          branch="$(git branch --show-current)"
+          upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+          head_sha="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse refs/remotes/origin/main)"
+
+          if [[ "$branch" != "main" ]]; then
+            echo "::error::Expected an attached main branch, found '${branch:-detached HEAD}'."
+            exit 1
+          fi
+          if [[ "$upstream" != "origin/main" ]]; then
+            echo "::error::Expected main to track origin/main, found '${upstream:-no upstream}'."
+            exit 1
+          fi
+          if [[ "$head_sha" != "$upstream_sha" ]]; then
+            echo "::error::Checked-out main $head_sha does not match origin/main $upstream_sha."
+            exit 1
+          fi
+
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$TESTED_SHA" != "$main_sha" || "$head_sha" != "$TESTED_SHA" ]]; then
+            echo "::notice::Skipping stale release for tested $TESTED_SHA;" \
+              "checked-out HEAD is $head_sha and current main is $main_sha."
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
+
+      - name: Require successful CI for a manual publication
+        if: >-
+          steps.preflight.outputs.ready == 'true' &&
+          steps.freshness.outputs.current == 'true' &&
+          steps.preflight.outputs.publish_enabled == 'true' &&
+          github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ steps.tested.outputs.sha }}
+        run: |
+          set -euo pipefail
+          runs="$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --branch main \
+            --commit "$TESTED_SHA" \
+            --event push \
+            --status success \
+            --limit 10 \
+            --json conclusion,headSha)"
+          jq -e --arg sha "$TESTED_SHA" \
+            'any(.[]; .headSha == $sha and .conclusion == "success")' \
+            <<< "$runs" >/dev/null
+
       # Once the crates.io trusted publisher exists, no long-lived registry
       # credential is present and release-plz exchanges this job's OIDC token.
       - name: Publish with crates.io trusted publishing
         id: release-trusted
         if: >-
           steps.preflight.outputs.ready == 'true' &&
+          steps.freshness.outputs.current == 'true' &&
+          steps.preflight.outputs.publish_enabled == 'true' &&
           steps.preflight.outputs.bootstrap-token == 'false'
         uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9  # v0.5.131
         with:
@@ -120,6 +211,8 @@ jobs:
         id: release-bootstrap
         if: >-
           steps.preflight.outputs.ready == 'true' &&
+          steps.freshness.outputs.current == 'true' &&
+          steps.preflight.outputs.publish_enabled == 'true' &&
           steps.preflight.outputs.bootstrap-token == 'true'
         uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9  # v0.5.131
         with:
@@ -226,38 +319,65 @@ jobs:
           [[ "$APP_SLUG" == "p4suta-release-plz" ]]
           [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq '.full_name')" == "$GITHUB_REPOSITORY" ]]
 
-      - name: Require the tested commit to still be current main
-        id: freshness
+      - name: Derive the tested main commit
+        id: tested
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TESTED_SHA: >-
             ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
-          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-          if [[ "$TESTED_SHA" != "$main_sha" ]]; then
-            echo "::notice::Skipping stale release PR update for $TESTED_SHA; current main is $main_sha."
-            echo "current=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "current=true" >> "$GITHUB_OUTPUT"
+          [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$TESTED_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Check out the tested main commit
-        if: steps.freshness.outputs.current == 'true'
+      - name: Check out main as an attached branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          ref: >-
-            ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          ref: main
           fetch-depth: 0
           persist-credentials: false
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Install Rust
-        if: steps.freshness.outputs.current == 'true'
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: stable
+
+      - name: Require the tested commit to still be current attached main
+        id: freshness
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TESTED_SHA: ${{ steps.tested.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          branch="$(git branch --show-current)"
+          upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+          head_sha="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse refs/remotes/origin/main)"
+
+          if [[ "$branch" != "main" ]]; then
+            echo "::error::Expected an attached main branch, found '${branch:-detached HEAD}'."
+            exit 1
+          fi
+          if [[ "$upstream" != "origin/main" ]]; then
+            echo "::error::Expected main to track origin/main, found '${upstream:-no upstream}'."
+            exit 1
+          fi
+          if [[ "$head_sha" != "$upstream_sha" ]]; then
+            echo "::error::Checked-out main $head_sha does not match origin/main $upstream_sha."
+            exit 1
+          fi
+
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$TESTED_SHA" != "$main_sha" || "$head_sha" != "$TESTED_SHA" ]]; then
+            echo "::notice::Skipping stale release PR update for tested" \
+              "$TESTED_SHA; checked-out HEAD is $head_sha and current main is $main_sha."
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
 
       - name: Create or update the release PR
         if: steps.freshness.outputs.current == 'true'

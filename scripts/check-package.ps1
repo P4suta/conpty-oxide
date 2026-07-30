@@ -60,6 +60,46 @@ function Write-Utf8File {
     [IO.File]::WriteAllText($Path, $Content.Replace("`r`n", "`n"), $encoding)
 }
 
+function Test-PackageMarkdownLink {
+    param(
+        [Parameter(Mandatory)]
+        [string] $PackageSource
+    )
+
+    $packagePrefix = [IO.Path]::GetFullPath($PackageSource).TrimEnd('\', '/') +
+        [IO.Path]::DirectorySeparatorChar
+    $linkPattern = [regex]'\]\((?<destination><[^>]+>|[^)\s]+)'
+    $markdownFiles = @(Get-ChildItem -LiteralPath $PackageSource -Recurse -File -Filter '*.md')
+
+    foreach ($markdownFile in $markdownFiles) {
+        $contents = [IO.File]::ReadAllText($markdownFile.FullName)
+        foreach ($link in $linkPattern.Matches($contents)) {
+            $destination = $link.Groups['destination'].Value.Trim('<', '>')
+            if ($destination.StartsWith('#', [StringComparison]::Ordinal)) {
+                continue
+            }
+
+            $absoluteUri = $null
+            if ([Uri]::TryCreate($destination, [UriKind]::Absolute, [ref] $absoluteUri)) {
+                continue
+            }
+
+            $relativePath = ($destination -split '[?#]', 2)[0]
+            if ([string]::IsNullOrWhiteSpace($relativePath)) {
+                continue
+            }
+
+            $decodedPath = [Uri]::UnescapeDataString($relativePath)
+            $target = [IO.Path]::GetFullPath((Join-Path $markdownFile.DirectoryName $decodedPath))
+            if (-not $target.StartsWith($packagePrefix, [StringComparison]::OrdinalIgnoreCase) -or
+                -not (Test-Path -LiteralPath $target)) {
+                $source = $markdownFile.FullName.Substring($packagePrefix.Length)
+                throw "published Markdown '$source' has missing relative link '$destination'"
+            }
+        }
+    }
+}
+
 Push-Location $repositoryRoot
 try {
     $metadataText = @(& cargo metadata --no-deps --format-version 1)
@@ -158,6 +198,8 @@ try {
         }
     }
     Write-Information "Package contents passed ($($files.Count) files)." -InformationAction Continue
+    Test-PackageMarkdownLink -PackageSource $packageSource
+    Write-Information 'Published Markdown links passed.' -InformationAction Continue
 
     $hadTargetDirectory = Test-Path Env:CARGO_TARGET_DIR
     $previousTargetDirectory = $env:CARGO_TARGET_DIR
@@ -198,6 +240,7 @@ try {
 name = "conpty-oxide-package-blocking-consumer"
 version = "0.0.0"
 edition = "2021"
+rust-version = "1.75"
 publish = false
 
 [dependencies.conpty-oxide]
@@ -212,7 +255,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new("cmd.exe")
         .args(["/c", "echo", "package-blocking-vt"])
         .spawn()?
-        .wait_with_output()?;
+        .collect_output()?;
     if output.status().code() != 0 {
         return Err(format!("unexpected exit code {}", output.status().code()).into());
     }
@@ -230,6 +273,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 name = "conpty-oxide-package-tokio-consumer"
 version = "0.0.0"
 edition = "2021"
+rust-version = "1.75"
 publish = false
 
 [dependencies.conpty-oxide]
@@ -249,7 +293,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new("cmd.exe")
         .args(["/c", "echo", "package-tokio-vt"])
         .spawn()?
-        .wait_with_output()
+        .collect_output()
         .await?;
     if output.status().code() != 0 {
         return Err(format!("unexpected exit code {}", output.status().code()).into());
@@ -265,14 +309,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         foreach ($consumer in @($blockingRoot, $tokioRoot)) {
             $consumerManifest = Join-Path $consumer 'Cargo.toml'
+            $consumerLock = Join-Path $consumer 'Cargo.lock'
+            if (Test-Path -LiteralPath $consumerLock) {
+                throw "external consumer unexpectedly has a stale lockfile: $consumerLock"
+            }
+
             Invoke-Checked -Program 'cargo' `
-                -Arguments @('generate-lockfile', '--manifest-path', $consumerManifest) `
+                -Arguments @(
+                    '+1.75.0',
+                    'generate-lockfile',
+                    '--manifest-path',
+                    $consumerManifest
+                ) `
                 -WorkingDirectory $consumer `
-                -Description "Locking external consumer '$consumer'"
+                -Description "Locking external consumer '$consumer' with Cargo 1.75"
+
+            $lockContents = [IO.File]::ReadAllText($consumerLock)
+            $lockVersion = [regex]::Match(
+                $lockContents,
+                '(?m)^version = (?<version>[0-9]+)\r?$'
+            )
+            if (-not $lockVersion.Success -or $lockVersion.Groups['version'].Value -ne '3') {
+                throw "Cargo 1.75 did not create a version 3 lockfile at $consumerLock"
+            }
+
             Invoke-Checked -Program 'cargo' `
-                -Arguments @('run', '--manifest-path', $consumerManifest, '--locked', '--quiet') `
+                -Arguments @(
+                    '+1.75.0',
+                    'run',
+                    '--manifest-path',
+                    $consumerManifest,
+                    '--locked',
+                    '--quiet'
+                ) `
                 -WorkingDirectory $consumer `
-                -Description "Running external consumer '$consumer'"
+                -Description "Running external consumer '$consumer' with Rust 1.75"
         }
     }
     finally {

@@ -5,9 +5,10 @@
 //! Asynchronous pseudoconsole sessions, driven by Tokio.
 //!
 //! This is the async front end of the crate and a faithful mirror of the
-//! `blocking` module. [`Command::output`] is
-//! the safe short path for complete output, while [`Command::spawn`] returns a
-//! managed [`Session`] for interactive I/O.
+//! `blocking` module. [`Command::spawn`] creates a managed [`Session`] for
+//! interactive I/O. After arranging for the root program to exit,
+//! [`Session::collect_output`] drains output concurrently and returns its
+//! status and remaining VT bytes.
 //!
 //! [`Session::into_parts`] provides independent owned I/O, child, and control
 //! handles. [`Child::wait`] uses
@@ -79,7 +80,8 @@
 //! # async fn main() -> conpty_oxide::Result<()> {
 //! let output = Command::new("cmd.exe")
 //!     .args(["/c", "echo", "hello"])
-//!     .output()
+//!     .spawn()?
+//!     .collect_output()
 //!     .await?;
 //! print!("{}", String::from_utf8_lossy(output.as_bytes()));
 //! assert!(output.status().success());

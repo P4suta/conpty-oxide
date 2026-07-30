@@ -27,7 +27,6 @@ pub fn conpty_oxide::blocking::Command::env_clear(&mut self) -> &mut Self
 pub fn conpty_oxide::blocking::Command::env_remove(&mut self, impl core::convert::AsRef<std::ffi::os_str::OsStr>) -> &mut Self
 pub fn conpty_oxide::blocking::Command::envs<I, K, V>(&mut self, I) -> &mut Self where I: core::iter::traits::collect::IntoIterator<Item = (K, V)>, K: core::convert::AsRef<std::ffi::os_str::OsStr>, V: core::convert::AsRef<std::ffi::os_str::OsStr>
 pub fn conpty_oxide::blocking::Command::new(impl core::convert::AsRef<std::ffi::os_str::OsStr>) -> Self
-pub fn conpty_oxide::blocking::Command::output(&mut self) -> conpty_oxide::Result<conpty_oxide::SessionOutput>
 pub fn conpty_oxide::blocking::Command::raw_arg(&mut self, impl core::convert::AsRef<std::ffi::os_str::OsStr>) -> &mut Self
 pub fn conpty_oxide::blocking::Command::spawn(&mut self) -> conpty_oxide::Result<conpty_oxide::blocking::Session>
 pub fn conpty_oxide::blocking::Command::spawn_with(&mut self, conpty_oxide::SessionOptions) -> conpty_oxide::Result<conpty_oxide::blocking::Session>
@@ -68,6 +67,7 @@ impl core::panic::unwind_safe::UnwindSafe for conpty_oxide::blocking::OwnedWrite
 pub struct conpty_oxide::blocking::Session
 impl conpty_oxide::blocking::Session
 pub fn conpty_oxide::blocking::Session::clear(&self) -> conpty_oxide::Result<()>
+pub fn conpty_oxide::blocking::Session::collect_output(self) -> conpty_oxide::Result<conpty_oxide::SessionOutput>
 pub const fn conpty_oxide::blocking::Session::id(&self) -> u32
 pub fn conpty_oxide::blocking::Session::into_parts(self) -> conpty_oxide::blocking::SessionParts
 pub fn conpty_oxide::blocking::Session::kill(&mut self) -> conpty_oxide::Result<()>
@@ -75,7 +75,6 @@ pub fn conpty_oxide::blocking::Session::resize(&self, conpty_oxide::Size) -> con
 pub fn conpty_oxide::blocking::Session::size(&self) -> conpty_oxide::Size
 pub fn conpty_oxide::blocking::Session::supports_clear(&self) -> bool
 pub fn conpty_oxide::blocking::Session::try_wait(&mut self) -> conpty_oxide::Result<core::option::Option<conpty_oxide::ExitStatus>>
-pub fn conpty_oxide::blocking::Session::wait_with_output(self) -> conpty_oxide::Result<conpty_oxide::SessionOutput>
 impl core::fmt::Debug for conpty_oxide::blocking::Session
 pub fn conpty_oxide::blocking::Session::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl std::io::Read for conpty_oxide::blocking::Session

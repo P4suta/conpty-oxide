@@ -52,8 +52,13 @@ fn blocking_surface_compiles() {
             .current_dir(".");
         let _: conpty_oxide::blocking::Session = command.spawn()?;
         let _: conpty_oxide::blocking::Session = command.spawn_with(options)?;
-        let _: conpty_oxide::SessionOutput = command.output()?;
         Ok(())
+    }
+
+    fn collect_output(
+        session: conpty_oxide::blocking::Session,
+    ) -> conpty_oxide::Result<conpty_oxide::SessionOutput> {
+        session.collect_output()
     }
 
     fn session_methods(session: &mut conpty_oxide::blocking::Session) -> conpty_oxide::Result<()> {
@@ -76,7 +81,12 @@ fn blocking_surface_compiles() {
         child.kill()
     }
 
-    let _ = (command_methods, session_methods, child_methods);
+    let _ = (
+        command_methods,
+        collect_output,
+        session_methods,
+        child_methods,
+    );
 }
 
 #[cfg(feature = "tokio")]
@@ -109,7 +119,13 @@ fn tokio_surface_compiles() {
         child.kill()
     }
 
+    async fn collect_output(
+        session: conpty_oxide::tokio::Session,
+    ) -> conpty_oxide::Result<conpty_oxide::SessionOutput> {
+        session.collect_output().await
+    }
+
     fn assert_async_io<T: ::tokio::io::AsyncRead + ::tokio::io::AsyncWrite>() {}
     assert_async_io::<conpty_oxide::tokio::Session>();
-    let _ = (command_methods, child_methods);
+    let _ = (command_methods, collect_output, child_methods);
 }

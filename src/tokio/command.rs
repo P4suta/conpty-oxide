@@ -12,7 +12,7 @@ use crate::core::session;
 use crate::core::wait::RegisteredWait;
 use crate::error::{Error, Result};
 use crate::status::ExitStatus;
-use crate::{SessionOptions, SessionOutput};
+use crate::SessionOptions;
 
 use super::pty::Pty;
 use super::session::Session;
@@ -196,17 +196,6 @@ impl Command {
             input,
             controller,
         })
-    }
-
-    /// Runs the command in a managed session and collects its complete VT
-    /// output.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if session creation, process spawning, output
-    /// draining, or process waiting fails.
-    pub async fn output(&mut self) -> Result<SessionOutput> {
-        self.spawn()?.wait_with_output().await
     }
 
     /// Spawns the command as the root child of an existing low-level `pty`.

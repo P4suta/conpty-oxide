@@ -5,27 +5,36 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # conpty-oxide
 
-A Windows ConPTY (pseudoconsole) library for Rust with blocking and Tokio APIs.
+[![CI](https://github.com/P4suta/conpty-oxide/actions/workflows/ci.yml/badge.svg)](https://github.com/P4suta/conpty-oxide/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/P4suta/conpty-oxide/actions/workflows/codeql.yml/badge.svg)](https://github.com/P4suta/conpty-oxide/actions/workflows/codeql.yml)
+[![crates.io](https://img.shields.io/crates/v/conpty-oxide.svg)](https://crates.io/crates/conpty-oxide)
+[![docs.rs](https://docs.rs/conpty-oxide/badge.svg)](https://docs.rs/conpty-oxide)
 
-The crate manages pseudoconsole lifetime, process-tree termination, output
-draining, and end-of-file behavior. It supports Windows 10 version 1809 and
-later. The minimum supported Rust version is 1.75.
+Windows ConPTY sessions for Rust, with blocking and Tokio APIs. Requires
+Windows 10 version 1809 or later and Rust 1.75 or later.
 
-## Features
-
-- Blocking and Tokio front ends with matching managed-session APIs.
-- Process-tree cleanup through Windows Job objects.
-- Consistent output and EOF handling across legacy and current ConPTY hosts.
-- Optional loading of a validated `conpty.dll` and `OpenConsole.exe` pair.
-- Optional lifecycle diagnostics through `tracing`.
-
-## Installation
+## Usage
 
 The default feature enables the blocking API:
 
 ```toml
 [dependencies]
 conpty-oxide = "0.1"
+```
+
+```rust
+use conpty_oxide::blocking::Command;
+
+fn main() -> conpty_oxide::Result<()> {
+    let output = Command::new("cmd.exe")
+        .args(["/d", "/c", "echo", "hello"])
+        .spawn()?
+        .collect_output()?;
+
+    assert!(output.status().success());
+    print!("{}", String::from_utf8_lossy(output.as_bytes()));
+    Ok(())
+}
 ```
 
 For Tokio:
@@ -41,34 +50,15 @@ version = "1"
 features = ["io-util", "macros", "rt-multi-thread"]
 ```
 
-Available crate features are `blocking`, `tokio`, and `tracing`.
-
-## Blocking
-
-```rust
-use conpty_oxide::blocking::Command;
-
-fn main() -> conpty_oxide::Result<()> {
-    let output = Command::new("cmd.exe")
-        .args(["/c", "echo", "hello"])
-        .output()?;
-
-    assert!(output.status().success());
-    print!("{}", String::from_utf8_lossy(output.as_bytes()));
-    Ok(())
-}
-```
-
-## Tokio
-
 ```rust
 use conpty_oxide::tokio::Command;
 
 #[tokio::main]
 async fn main() -> conpty_oxide::Result<()> {
     let output = Command::new("cmd.exe")
-        .args(["/c", "echo", "hello"])
-        .output()
+        .args(["/d", "/c", "echo", "hello"])
+        .spawn()?
+        .collect_output()
         .await?;
 
     assert!(output.status().success());
@@ -77,43 +67,28 @@ async fn main() -> conpty_oxide::Result<()> {
 }
 ```
 
-Use `Command::spawn()` for an interactive managed session. Drain output while
-the child is running, and keep the input half alive until the child exits;
-closing input requests pseudoconsole shutdown. `Command::output()` and
-`Session::wait_with_output()` handle these rules for collected output.
+`collect_output` is root-bounded: it drains output while waiting for the root
+process, then terminates descendants that outlive it and returns the root exit
+status. The program must exit by itself or through its application protocol.
+ConPTY has no ordinary stdin half-close; closing terminal input tears down the
+session instead of delivering a portable EOF.
 
-## Backend selection
+Use `Command::spawn()` and `Session::into_parts()` for interactive or custom
+I/O coordination. Managed sessions own a kill-on-close Job, so dropping an
+unfinished session terminates its entire process tree. ConPTY output is one VT
+byte stream rather than separate stdout and stderr streams.
 
-By default, the crate uses a valid `conpty.dll`/`OpenConsole.exe` pair next to
-the executable when present, then falls back to the operating-system ConPTY.
-Use `ConPtyBackend::from_dir` and `SessionOptions::backend` to select a bundle
-explicitly. Both files must come from the same
-[`Microsoft.Windows.Console.ConPTY`](https://www.nuget.org/packages/Microsoft.Windows.Console.ConPTY)
-package.
+The `blocking`, `tokio`, and `tracing` crate features may be combined. Backend
+selection uses a validated `conpty.dll`/`OpenConsole.exe` pair next to the
+application when available, then falls back to the system ConPTY.
 
-## Documentation
+## Links
 
 - [API documentation](https://docs.rs/conpty-oxide)
-- [Examples](examples)
-- [ConPTY lifecycle and compatibility notes](docs/conpty-pitfalls.md)
-- [Release and artifact verification](docs/releasing.md)
-- [Changelog](CHANGELOG.md)
-- [Contributing](CONTRIBUTING.md)
+- [Examples](https://github.com/P4suta/conpty-oxide/tree/main/examples)
+- [ConPTY lifecycle notes](https://github.com/P4suta/conpty-oxide/blob/main/docs/conpty-pitfalls.md)
+- [Changelog](https://github.com/P4suta/conpty-oxide/blob/main/CHANGELOG.md)
+- [Contributing](https://github.com/P4suta/conpty-oxide/blob/main/CONTRIBUTING.md)
+- [Security policy](https://github.com/P4suta/conpty-oxide/security/policy)
 
-Version 0.1 is Windows-only and intentionally excludes detached sessions,
-manual EOF policy, cursor inheritance, pre-staged spawning, and a
-cross-platform facade. Breaking changes remain possible before 1.0.
-
-## Development
-
-```powershell
-just setup
-just ci
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete workflow.
-
-## License
-
-Licensed under either the [Apache License 2.0](LICENSE-APACHE) or the
-[MIT License](LICENSE-MIT), at your option.
+Licensed under either Apache-2.0 or MIT, at your option.

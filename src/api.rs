@@ -54,7 +54,7 @@ impl SessionOptions {
     }
 }
 
-/// Complete virtual-terminal output collected from a managed session.
+/// Virtual-terminal output collected from a managed session.
 ///
 /// `ConPTY` exposes one rendered VT byte stream rather than distinct stdout and
 /// stderr channels, so this type intentionally does not pretend otherwise.

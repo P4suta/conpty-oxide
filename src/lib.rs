@@ -60,9 +60,9 @@
 // error rather than a dead link.
 #![cfg_attr(
     feature = "blocking",
-    doc = "[`blocking`] holds the synchronous API. The safe short path is",
-    doc = "[`blocking::Command::spawn`] for an interactive managed session or",
-    doc = "[`blocking::Command::output`] for complete VT output. Use",
+    doc = "[`blocking`] holds the synchronous API. Start a managed session with",
+    doc = "[`blocking::Command::spawn`], then use",
+    doc = "[`blocking::Session::collect_output`] for root-bounded collection or",
     doc = "[`blocking::Session::into_parts`] for independently owned I/O, child,",
     doc = "and control handles.",
     doc = ""

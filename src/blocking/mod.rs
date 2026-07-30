@@ -4,11 +4,10 @@
 
 //! Blocking pseudoconsole sessions.
 //!
-//! This is the synchronous front end of the crate. For complete command
-//! output, [`Command::output`] is the safe short path: it creates a managed
-//! [`Session`], drains output without hidden tasks, and returns the status and
-//! VT bytes. [`Command::spawn`] returns the same managed session for
-//! interactive I/O.
+//! This is the synchronous front end of the crate. [`Command::spawn`] creates
+//! a managed [`Session`] for interactive I/O. After arranging for the root
+//! program to exit, [`Session::collect_output`] drains output concurrently and
+//! returns its status and remaining VT bytes.
 //!
 //! # Service the output pipe from another thread
 //!
@@ -67,7 +66,8 @@
 //! # fn main() -> conpty_oxide::Result<()> {
 //! let output = Command::new("cmd.exe")
 //!     .args(["/c", "echo", "hello"])
-//!     .output()?;
+//!     .spawn()?
+//!     .collect_output()?;
 //! print!("{}", String::from_utf8_lossy(output.as_bytes()));
 //! assert!(output.status().success());
 //! # Ok(())

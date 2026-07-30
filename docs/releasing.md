@@ -36,19 +36,25 @@ Keep these repository settings enabled:
   automatic branch updates.
 
 The `release` Environment permits only `main` and `v*`. It contains the
-non-secret variable `RELEASE_PLZ_APP_CLIENT_ID`. Add the permanent secret
+non-secret variables `RELEASE_PLZ_APP_CLIENT_ID` and `RELEASE_ENABLED`. Keep
+`RELEASE_ENABLED` set to `false` except during an explicitly approved publish.
+Add the permanent secret
 `RELEASE_PLZ_APP_PRIVATE_KEY` for the installed `p4suta-release-plz` App. The
 App needs repository **Contents: read/write** and **Pull requests:
 read/write**; it does not need Administration access.
 
 ## Automated release flow
 
-`release-plz` runs only after the exact `main` commit passes the `CI` workflow.
-It uses release pull requests and `release_always = false`, so an ordinary
-merge cannot publish a crate. Its App token is limited to this repository and
-the workflow verifies the returned App slug before use.
+`release-plz` runs only for the exact current `main` commit. Automatic runs
+come from a successful `CI` workflow; manual publication additionally queries
+Actions for a successful push-triggered CI run at the same SHA. It uses
+release pull requests and `release_always = false`, so an unrelated merge
+cannot publish. The publish action is not invoked at all unless the release
+Environment also has `RELEASE_ENABLED=true`. Its App token is limited to this
+repository and the workflow verifies the returned App slug before use.
 
-Merging a release-plz pull request performs the following sequence:
+Once a reviewed release-plz pull request is current and the publish gate is
+enabled, release-plz performs the following sequence:
 
 1. `release-plz release` publishes the version, creates `vX.Y.Z`, and creates a
    draft GitHub release.
@@ -88,32 +94,29 @@ project's curated initial history.
 
 1. Add `CARGO_REGISTRY_TOKEN` to the `release` Environment with only
    `publish-new` and `publish-update` scopes. Keep the token out of repository
-   and command-line logs. Add `RELEASE_PLZ_APP_PRIVATE_KEY` there as well.
+   and command-line logs. Add `RELEASE_PLZ_APP_PRIVATE_KEY` there as well, and
+   confirm `RELEASE_ENABLED=false`.
 2. Reconfirm immediately before merging that `conpty-oxide` is still available
    on crates.io; the dry-run does not reserve the name.
 3. Run `just release-check` on the release commit. Review
    `cargo package --list --locked`, then push it and require every pull-request
    check to pass.
-4. Review and merge the prepared `release-plz-v0.1.0` pull request. Confirm that
-   it changes only the release state described above; the branch prefix is the
-   release-plz contract that authorizes publication with `release_always =
-   false`.
-5. Wait for crates.io publication, finalization, immutable-release verification,
+4. Review and merge the prepared `release-plz-v0.1.0` pull request while the
+   publish gate is still false. Confirm that it changes only the release state
+   described above; the branch prefix is the release-plz contract that
+   authorizes publication with `release_always = false`.
+5. Reconfirm that this exact `main` SHA passed CI, set `RELEASE_ENABLED=true`,
+   and manually dispatch `Release-plz` from `main`. Do not push another commit.
+6. Wait for crates.io publication, finalization, immutable-release verification,
    and the docs.rs builds for all documented features and Windows targets.
-6. Once the crate and docs.rs links resolve, add only the compact crates.io,
-   docs.rs, and CI badges to the README in a normal follow-up pull request.
-7. On crates.io, configure the trusted publisher as owner `P4suta`, repository
+7. Set `RELEASE_ENABLED=false` again. Once the crate and docs.rs links resolve,
+   enable the compact crates.io and docs.rs badges if they were not already
+   prepared.
+8. On crates.io, configure the trusted publisher as owner `P4suta`, repository
    `conpty-oxide`, workflow `release-plz.yml`, Environment `release`.
-8. Delete the Environment token and revoke it on crates.io immediately after
+9. Delete the Environment token and revoke it on crates.io immediately after
    saving the trusted publisher. Confirm the next release logs show the OIDC
    exchange; later releases use only short-lived credentials.
-
-For a credential-free repository handoff, the prepared release PR may instead
-be squash-merged while the automation is dormant. Make no later commit to
-`main`: release-plz authorizes the first publish by associating the current
-commit with the `release-plz-v0.1.0` PR. After adding both Environment secrets,
-manually dispatch `Release-plz` from `main`. The normal CI-complete release and
-finalization sequence then resumes at that exact commit.
 
 ## Registry and GitHub reconciliation
 
@@ -144,6 +147,10 @@ Before merging a release-plz pull request:
 3. Confirm the public API snapshots, package contents, external blocking/Tokio
    consumers, coverage threshold, and dry-run publish all pass.
 4. Merge only after the required Ruleset checks pass on the current head.
+
+Keep `RELEASE_ENABLED=false` through the merge. When that exact merge commit's
+CI run succeeds, enable the gate, manually dispatch `Release-plz` from `main`,
+and return the gate to `false` after the release workflow completes.
 
 After publication, verify the distributed bytes independently:
 
