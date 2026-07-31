@@ -1,0 +1,21 @@
+// SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+use conpty_oxide::blocking::Command;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new("cmd.exe")
+        .args(["/c", "echo", "package-blocking-vt"])
+        .spawn()?
+        .collect_output()?;
+    if output.status().code() != 0 {
+        return Err(format!("unexpected exit code {}", output.status().code()).into());
+    }
+    let rendered = String::from_utf8_lossy(output.as_bytes());
+    if !rendered.contains("package-blocking-vt") {
+        return Err(format!("marker missing from VT output: {rendered:?}").into());
+    }
+    println!("blocking consumer passed");
+    Ok(())
+}

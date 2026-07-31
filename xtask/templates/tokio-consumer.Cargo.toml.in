@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "conpty-oxide-package-tokio-consumer"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.75"
+publish = false
+
+[dependencies.conpty-oxide]
+path = "@DEPENDENCY_PATH@"
+default-features = false
+features = ["tokio"]
+
+[dependencies.tokio]
+version = "1"
+features = ["macros", "net", "rt"]
