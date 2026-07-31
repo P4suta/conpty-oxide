@@ -105,6 +105,12 @@ jobs:
       CONPTY_OXIDE_TEST_DLL_DIR: ${{ github.workspace }}/vendor/conpty
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # The contributor-automation crate always builds with stable, so install
+      # it alongside the matrix toolchain; the matrix toolchain is installed
+      # last and stays the default the tests run under.
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: ${{ matrix.rust }}
@@ -119,6 +125,10 @@ jobs:
           key: conpty-package-${{ hashFiles('xtask/src/fetch_conpty.rs') }}
       - name: Fetch and validate the bundled ConPTY
         run: just fetch-conpty
+        env:
+          # The xtask lockfile and dependencies track stable Rust; the MSRV
+          # legs only pin the toolchain the published crate is tested with.
+          RUSTUP_TOOLCHAIN: stable
       - name: Run nextest and doctests
         run: just test-ci
       - name: Upload JUnit
