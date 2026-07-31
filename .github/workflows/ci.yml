@@ -116,7 +116,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: vendor/.package
-          key: conpty-package-${{ hashFiles('scripts/fetch-conpty.ps1') }}
+          key: conpty-package-${{ hashFiles('xtask/src/fetch_conpty.rs') }}
       - name: Fetch and validate the bundled ConPTY
         run: just fetch-conpty
       - name: Run nextest and doctests
@@ -148,7 +148,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: vendor/.package
-          key: conpty-package-${{ hashFiles('scripts/fetch-conpty.ps1') }}
+          key: conpty-package-${{ hashFiles('xtask/src/fetch_conpty.rs') }}
       - name: Generate and enforce coverage
         run: just coverage
       - name: Upload coverage report
