@@ -6,8 +6,8 @@
 //!
 //! [`Size`] is a validated pair of terminal dimensions. `ConPTY` represents the
 //! console size as a `COORD` whose members are `i16`, so each dimension must
-//! be in `1..=`[`Size::MAX_DIMENSION`]. This module is pure Rust and has no
-//! dependency on `windows-sys`.
+//! be between 1 and [`Size::MAX_DIMENSION`] inclusive. This module is pure Rust
+//! and has no dependency on `windows-sys`.
 
 use core::fmt;
 

@@ -14,9 +14,11 @@ publish = false
 anyhow = "1"
 flate2 = "1"
 pelite = "0.10"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 regex = "1"
 serde_json = "1"
 sha2 = "0.10"
+syn = { version = "2", features = ["full", "visit"] }
 tar = "0.4"
 ureq = "2"
 
@@ -31,3 +33,9 @@ features = ["deflate"]
 # contributor automation never affects its lockfile, lints, packaging, or
 # release checks.
 [workspace]
+
+[lints.clippy]
+doc_link_code = "deny"
+future_not_send = "deny"
+needless_collect = "deny"
+rc_buffer = "deny"

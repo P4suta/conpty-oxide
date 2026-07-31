@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::*;
+use std::error;
 
 fn io_err(kind: io::ErrorKind) -> io::Error {
     io::Error::new(kind, "underlying os error")

@@ -100,8 +100,12 @@ pedantic = { level = "deny", priority = -1 }
 # intentionally want to keep across compiler upgrades. The nursery group as a
 # whole is deliberately not enabled because it is unstable by definition.
 assigning_clones = "deny"
+doc_link_code = "deny"
+future_not_send = "deny"
 missing_const_for_fn = "deny"
+needless_collect = "deny"
 option_if_let_else = "deny"
+rc_buffer = "deny"
 redundant_clone = "deny"
 
 # Intentionally omitted: this lint also fires on `pub(super)` items whose
