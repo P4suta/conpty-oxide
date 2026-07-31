@@ -10,20 +10,22 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 [![crates.io](https://img.shields.io/crates/v/conpty-oxide.svg)](https://crates.io/crates/conpty-oxide)
 [![docs.rs](https://docs.rs/conpty-oxide/badge.svg)](https://docs.rs/conpty-oxide)
 
-A Windows-only foundation for using ConPTY safely and naturally from Rust,
-with symmetric blocking and Tokio APIs. Requires Windows 10 version 1809 or
+Windows pseudoconsole (ConPTY) sessions for Rust: spawn a process under a
+pseudoconsole, control it, and read its terminal output, with equivalent
+blocking and Tokio APIs. Windows-only; requires Windows 10 version 1809 or
 later and Rust 1.75 or later.
 
-## Choose a completion path
+## Usage
 
-The default feature enables the blocking API:
+The default `blocking` feature enables the synchronous API:
 
 ```toml
 [dependencies]
 conpty-oxide = "0.1"
 ```
 
-When output is unnecessary, `wait` drains and discards it concurrently:
+Run a process and wait for its exit status; output is drained and discarded
+concurrently:
 
 ```rust
 use conpty_oxide::blocking::Command;
@@ -38,7 +40,7 @@ fn main() -> conpty_oxide::Result<()> {
 }
 ```
 
-To retain the raw terminal stream, use `collect_output`:
+Capture the raw terminal output instead:
 
 ```rust
 use conpty_oxide::blocking::Command;
@@ -55,8 +57,8 @@ fn main() -> conpty_oxide::Result<()> {
 }
 ```
 
-For an interactive terminal, IDE, or custom I/O loop, split the managed
-session into independently owned I/O, child, and control handles:
+For interactive use, split the session into independently owned input,
+output, child, and control handles:
 
 ```no_run
 use conpty_oxide::blocking::Command;
@@ -70,7 +72,9 @@ fn main() -> conpty_oxide::Result<()> {
 }
 ```
 
-For Tokio, disable default features and enable `tokio`:
+### Tokio
+
+Disable default features and enable `tokio`:
 
 ```toml
 [dependencies.conpty-oxide]
@@ -83,7 +87,7 @@ version = "1"
 features = ["io-util", "macros", "rt-multi-thread"]
 ```
 
-The same three paths are asynchronous where necessary:
+The asynchronous API mirrors the blocking one:
 
 ```no_run
 use conpty_oxide::tokio::Command;
@@ -96,83 +100,50 @@ async fn main() -> conpty_oxide::Result<()> {
         .wait()
         .await?;
     assert!(status.success());
-
-    let output = Command::new("cmd.exe")
-        .args(["/d", "/c", "echo", "hello"])
-        .spawn()?
-        .collect_output()
-        .await?;
-    assert!(output.status().success());
-
-    let parts = Command::new("cmd.exe").spawn()?.into_parts();
-    // Drive parts.output concurrently with input and child control.
-    drop(parts);
     Ok(())
 }
 ```
 
-## Managed-session contract
+## Behavior
 
-A managed session is bounded by its root process. After the root status is
-saved, conpty-oxide terminates descendants that remain in the session Job and
-drains the teardown tail to EOF. The reported status is always the root's real
-status. This applies after `into_parts` too; splitting ownership does not detach
-the process tree.
+- A session is bounded by its root process. Once the root exits, descendants
+  remaining in the session Job are terminated, and the reported status is the
+  root's real exit status. This also holds after `into_parts`.
+- Dropping an unfinished `Session` or `Child` terminates the whole Job.
+- `wait` discards output with bounded memory. `collect_output` buffers every
+  unread byte. The lower-level `Child::wait` waits on the root alone and
+  requires the caller to drain output concurrently.
+- ConPTY input and output must be serviced concurrently; a full output pipe
+  stalls the session (see [Microsoft's ConPTY guidance][ms-conpty]). `wait`
+  and `collect_output` handle this internally.
+- Output is a single raw UTF-8/VT byte stream. ConPTY has no separate stdout
+  and stderr channels.
+- Dropping or shutting down input ends the terminal session; it is not a way
+  to deliver stdin EOF to the child.
+- Backend selection prefers a validated `conpty.dll`/`OpenConsole.exe` pair
+  next to the executable and falls back to the system ConPTY.
 
-`wait` discards output without an output-sized allocation. `collect_output`
-retains every unread byte and is therefore unbounded; use `wait` when output is
-unneeded or `into_parts` to process it as a stream. `Child::wait` is the lower-
-level root-process wait and requires the caller to drain output concurrently.
+[ms-conpty]: https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session
 
-ConPTY has two important stream semantics:
+## Feature flags
 
-- Dropping or shutting down input ends the terminal session. It is not a
-  portable way to deliver stdin EOF to the child.
-- Output is one raw UTF-8/VT byte stream. ConPTY does not expose separate stdout
-  and stderr channels, and this crate does not parse terminal sequences.
+- `blocking` (default) — synchronous API.
+- `tokio` — asynchronous API on Tokio.
+- `tracing` — instrumentation through the `tracing` crate.
 
-Microsoft recommends servicing conin and conout concurrently, commonly on
-separate threads. A single blocking flow can deadlock: once the output pipe is
-full, the console host stops making progress, which can also prevent the child
-from reaching the point where the caller expects it to exit. `Session::wait`
-and `collect_output` provide the safe combined operations; custom integrations
-must preserve the same concurrency. See [Microsoft's ConPTY session guidance](https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session).
+The features can be combined.
 
-Dropping an unfinished public `Session` or `Child` terminates the complete Job.
-`resize` and supported `clear` operations report a `NotConnected` I/O source
-after teardown.
+## Non-goals
 
-## Scope
-
-ConPTY is useful both for terminal implementations and for running programs
-that behave differently unless they believe they have a terminal. Typical
-uses include:
-
-- terminal UIs and terminal-emulator backends;
-- IDE, debugger, and task-runner terminal integration;
-- interactive CLI automation that processes raw VT itself;
-- running TTY-dependent tools with resize and process-tree control.
-
-This crate intentionally does not provide a VT parser, terminal widget,
-`expect` engine, shell protocol, or cross-platform PTY abstraction. Those are
-higher layers with different policy choices. The project follows the same
-practical PTY use cases described by
-[node-pty](https://github.com/microsoft/node-pty), while keeping its own API Windows-specific and Rust-native.
-
-Cursor inheritance, manual EOF policy, detached sessions, raw `HPCON` access,
-and `Command::output`/`status` convenience methods are outside the 0.1 API.
-Future advanced operations should be typed around tasks rather than expose
-unchecked Win32 flags.
-
-The `blocking`, `tokio`, and `tracing` crate features may be combined. Backend
-selection prefers a validated `conpty.dll`/`OpenConsole.exe` pair next to the
-application when available, then falls back to the system ConPTY.
+VT parsing, terminal widgets, `expect`-style automation, shell protocols, and
+cross-platform PTY abstraction are out of scope. This crate is the
+Windows-specific session layer that such tools can build on.
 
 ## Links
 
 - [API documentation](https://docs.rs/conpty-oxide)
 - [Examples](https://github.com/P4suta/conpty-oxide/tree/main/examples)
-- [Detailed ConPTY lifecycle notes](https://github.com/P4suta/conpty-oxide/blob/main/docs/conpty-pitfalls.md)
+- [ConPTY lifecycle notes](https://github.com/P4suta/conpty-oxide/blob/main/docs/conpty-pitfalls.md)
 - [Changelog](https://github.com/P4suta/conpty-oxide/blob/main/CHANGELOG.md)
 - [Contributing](https://github.com/P4suta/conpty-oxide/blob/main/CONTRIBUTING.md)
 - [Security policy](https://github.com/P4suta/conpty-oxide/security/policy)
