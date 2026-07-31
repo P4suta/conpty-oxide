@@ -35,7 +35,7 @@ lint-fast: source-policy
     yamllint --strict .
     $workflows = @(Get-ChildItem -LiteralPath '.github/workflows' -Filter '*.yml' | Where-Object Name -ne 'release-finalize.yml' | ForEach-Object FullName); actionlint @workflows; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     actionlint -shellcheck= .github/workflows/release-finalize.yml
-    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-workflow-shells.ps1 -Path .github/workflows/release-finalize.yml -DefaultShell bash -ExpectedCount 11
+    cargo run --manifest-path xtask/Cargo.toml --locked -- workflow-shells --path .github/workflows/release-finalize.yml --default-shell bash --expected-count 11
     cargo shear --deny-warnings --check-test-targets
 
 # Strict Rust linting over every feature combination.
