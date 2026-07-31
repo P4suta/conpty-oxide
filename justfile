@@ -74,11 +74,11 @@ api-matrix:
 
 # Verify the four committed API snapshots and the feature-invariance rules.
 public-api:
-    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-public-api.ps1
+    cargo run --manifest-path xtask/Cargo.toml --locked -- public-api
 
 # Deliberately accept the current API as the pre-1.0 baseline.
 public-api-update:
-    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-public-api.ps1 -Update
+    cargo run --manifest-path xtask/Cargo.toml --locked -- public-api --update
 
 # Build the docs as docs.rs does - nightly, --cfg docsrs (needs a nightly toolchain)
 doc-docsrs:
