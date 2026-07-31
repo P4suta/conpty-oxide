@@ -14,7 +14,9 @@ documentation = "https://docs.rs/conpty-oxide"
 readme = "README.md"
 keywords = ["conpty", "pty", "pseudoconsole", "windows", "terminal"]
 categories = ["os::windows-apis", "asynchronous"]
-publish = ["crates-io"]
+# No `publish` restriction: release-plz cannot resolve the reserved
+# `crates-io` registry name from `publish = ["crates-io"]`, and an empty
+# field already means "publish to crates.io".
 include = [
   "/src/**",
   "/tests/**",
