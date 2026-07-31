@@ -189,10 +189,10 @@ impl Session {
     }
 
     /// Decomposes this session for interactive or externally coordinated I/O.
-    #[must_use]
+    ///
     /// Splitting changes ownership only: root exit still terminates remaining
     /// descendants and advances output to EOF. It does not detach the session.
-    ///
+    #[must_use]
     pub fn into_parts(self) -> SessionParts {
         SessionParts {
             child: self.child,
