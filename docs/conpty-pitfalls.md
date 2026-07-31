@@ -265,7 +265,7 @@ DLL's search exactly: adjacent first, then the native-architecture
 subdirectory resolved through a dynamically loaded `IsWow64Process2`. The inbox
 `conhost.exe` is deliberately not accepted as a validation target — falling
 back to it hands the caller a backend with the behaviour they were trying to
-replace. `scripts/fetch-conpty.ps1` lays both files out side by side, which is
+replace. `just fetch-conpty` lays both files out side by side, which is
 the layout with no ambiguity at all.
 
 **Sources.**
@@ -498,7 +498,7 @@ rather than trusting that the call succeeded — a swapped pair succeeds too.
 | Conin is the terminal, not stdin | `src/blocking/pty.rs`, `src/tokio/pty.rs` |
 | Bundle validation and version pairs | `src/backend/bundle.rs` |
 | Export detection and module pinning | `src/backend/exports.rs` |
-| Console host discovery | `src/backend/bundle.rs`, `scripts/fetch-conpty.ps1` |
+| Console host discovery | `src/backend/bundle.rs`, `xtask/src/fetch_conpty.rs` |
 | Cursor inheritance | `src/backend.rs`, both frontend `builder.rs` modules |
 | Exit detection, root watcher, legacy close grace | `src/core/wait.rs` |
 | Kill tree | `src/core/job.rs` |
