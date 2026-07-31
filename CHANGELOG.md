@@ -12,7 +12,7 @@ with Cargo's additional pre-1.0 compatibility rules.
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-07-30
+## [0.1.0] - 2026-07-31
 
 ### Added
 
