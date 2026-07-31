@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use regex::Regex;
 
+use crate::util::repository_root;
+
 /// Top-level directories that never contain project-owned Rust source.
 const EXCLUDED_TOP_LEVEL: [&str; 3] = [".git", "target", "vendor"];
 
@@ -48,12 +50,6 @@ pub fn run() -> Result<()> {
 
     println!("Source policy passed for {} Rust files.", files.len());
     Ok(())
-}
-
-fn repository_root() -> Result<&'static Path> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .context("the xtask manifest directory has no parent")
 }
 
 fn relative_repository_path(root: &Path, path: &Path) -> Result<String> {
