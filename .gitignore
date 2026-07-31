@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 /target
+/xtask/target
 # Third-party binaries fetched by `just fetch-conpty`; never committed.
 /vendor
 /.rumdl_cache

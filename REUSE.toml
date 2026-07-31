@@ -7,7 +7,7 @@ version = 1
 # keeps their redistribution unambiguous without pretending they are part of
 # the crate's hand-authored dual-licensed source.
 [[annotations]]
-path = ["Cargo.lock", "mise.lock"]
+path = ["Cargo.lock", "mise.lock", "xtask/Cargo.lock"]
 precedence = "override"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
