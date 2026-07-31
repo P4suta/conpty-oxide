@@ -19,10 +19,11 @@ setup-powershell-lint:
 # Format all Rust sources.
 fmt:
     cargo fmt --all
+    cargo fmt --manifest-path xtask/Cargo.toml --all
 
 # Enforce repository-wide Rust source rules Clippy cannot express.
 source-policy:
-    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-source-policy.ps1
+    cargo run --manifest-path xtask/Cargo.toml --locked -- source-policy
 
 # Fast, deterministic repository policy checks used by pre-commit.
 lint-fast: source-policy
@@ -50,11 +51,17 @@ supply-chain:
 lint-powershell:
     $module = Join-Path $PWD '.tools/PSScriptAnalyzer/1.25.0/PSScriptAnalyzer.psd1'; if (-not (Test-Path -LiteralPath $module)) { throw 'PSScriptAnalyzer 1.25.0 is missing; run just setup-powershell-lint' }; Import-Module $module -Force; $issues = @(Invoke-ScriptAnalyzer -Path scripts -Recurse -Severity Warning,Error); $issues | Format-Table -AutoSize; if ($issues.Count -ne 0) { throw "PSScriptAnalyzer reported $($issues.Count) issue(s)" }
 
+# Check the contributor automation crate: formatting, lints, and tests.
+xtask-check:
+    cargo fmt --manifest-path xtask/Cargo.toml --all -- --check
+    cargo clippy --manifest-path xtask/Cargo.toml --all-targets --locked -- -D warnings
+    cargo test --manifest-path xtask/Cargo.toml --locked
+
 # Every required static policy.
-policy: lint-fast supply-chain lint-powershell
+policy: lint-fast supply-chain lint-powershell xtask-check
 
 # Complete lint suite.
-lint: lint-fast lint-rust supply-chain lint-powershell
+lint: lint-fast lint-rust supply-chain lint-powershell xtask-check
 
 # Build the documentation, failing on any rustdoc warning (missing docs included)
 doc:
@@ -145,7 +152,7 @@ release-check: clean-worktree ci package-check
 pre-commit: lint-fast
 
 # Strict local hook; expensive platform/MSRV/coverage checks stay in CI.
-pre-push: lint-rust supply-chain lint-powershell test
+pre-push: lint-rust supply-chain lint-powershell xtask-check test
 
 # Everything required by pull requests; mutation remains scheduled/manual.
 ci: lint api-matrix public-api doc doc-docsrs test msrv cross-targets test-dll coverage
