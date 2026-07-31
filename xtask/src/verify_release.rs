@@ -161,16 +161,17 @@ pub fn run(arguments: &[String]) -> Result<()> {
     let sbom = verify_cyclonedx_document(&sbom_path, &sbom_asset, &version, &crate_sha256)?;
     eprintln!("CycloneDX root component and crates.io distribution metadata passed.");
 
-    let source_digest = resolve_tag_commit(repository, &resolved_tag)?;
+    let tag_commit = resolve_tag_commit(repository, &resolved_tag)?;
     let crate_path = download_directory.join(&crate_asset);
+    verify_vcs_info(&crate_path, &version, &tag_commit)?;
+    eprintln!("The release .crate records the tagged commit {tag_commit}.");
+
     let provenance_bundle_path = download_directory.join(&provenance_bundle);
     let sbom_bundle_path = download_directory.join(&sbom_bundle);
 
     let attestation = AttestationContext {
         repository,
         signer_workflow: &signer_workflow,
-        resolved_tag: &resolved_tag,
-        source_digest: &source_digest,
     };
     let attest = |artifact: &Path, predicate: &str, bundle: Option<&Path>, description: &str| {
         verify_attestation(&attestation, artifact, predicate, bundle, description)
@@ -631,12 +632,50 @@ fn resolve_tag_commit(repository: &str, resolved_tag: &str) -> Result<String> {
     Ok(object_sha.to_lowercase())
 }
 
+/// Requires the crate archive's `.cargo_vcs_info.json` to record exactly the
+/// tagged release commit, packaged from a clean working tree.
+fn verify_vcs_info(crate_path: &Path, version: &str, tag_commit: &str) -> Result<()> {
+    let entry_name = format!("{CRATE_NAME}-{version}/.cargo_vcs_info.json");
+    let file = fs::File::open(crate_path)
+        .with_context(|| format!("failed to open {}", crate_path.display()))?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    let entries = archive
+        .entries()
+        .context("failed to enumerate the crate archive")?;
+    for entry in entries {
+        let mut entry = entry.context("failed to read a crate archive entry")?;
+        let path = entry.path().context("a crate archive entry has no path")?;
+        if path.to_string_lossy().replace('\\', "/") != entry_name {
+            continue;
+        }
+        let mut contents = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut contents)
+            .context("failed to read .cargo_vcs_info.json from the crate")?;
+        let info: Value =
+            serde_json::from_str(&contents).context(".cargo_vcs_info.json is not valid JSON")?;
+        let recorded = required_str(&info["git"], "sha1", ".cargo_vcs_info.json git object")?;
+        ensure!(
+            recorded.eq_ignore_ascii_case(tag_commit),
+            "The crate records commit {recorded}, but the tag resolves to {tag_commit}."
+        );
+        ensure!(
+            !info["git"]["dirty"].as_bool().unwrap_or(false),
+            "The crate was packaged from a dirty working tree."
+        );
+        return Ok(());
+    }
+    bail!("The crate archive contains no '{entry_name}'.");
+}
+
 /// The release-wide identity every attestation must verify against.
+///
+/// The finalizer's dispatch ref is deliberately not part of this identity:
+/// the finalizer may run from `main` to repair an existing tag, and
+/// `verify_vcs_info` already binds the crate bytes to the tagged commit.
 struct AttestationContext<'a> {
     repository: &'a str,
     signer_workflow: &'a str,
-    resolved_tag: &'a str,
-    source_digest: &'a str,
 }
 
 fn verify_attestation(
@@ -647,7 +686,6 @@ fn verify_attestation(
     description: &str,
 ) -> Result<Vec<Value>> {
     let artifact_text = artifact.to_string_lossy();
-    let source_ref = format!("refs/tags/{}", context.resolved_tag);
     let mut arguments = vec![
         "attestation",
         "verify",
@@ -658,10 +696,6 @@ fn verify_attestation(
         predicate_type,
         "--signer-workflow",
         context.signer_workflow,
-        "--source-ref",
-        &source_ref,
-        "--source-digest",
-        context.source_digest,
         "--deny-self-hosted-runners",
         "--limit",
         "100",

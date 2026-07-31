@@ -263,6 +263,9 @@ jobs:
           manifest_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')"
           [[ "$manifest_version" == "$version" ]]
 
+          # release-plz creates the tag remotely, so the local checkout only
+          # sees it after an explicit fetch.
+          git fetch --tags --force --quiet origin
           release_commit="$(git rev-list -n 1 "$tag")"
           [[ "$release_commit" == "$(git rev-parse HEAD)" ]]
 

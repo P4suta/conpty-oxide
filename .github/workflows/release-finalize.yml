@@ -67,15 +67,28 @@ jobs:
             exit 1
           fi
           [[ "$RELEASE_TAG" == "v$RELEASE_VERSION" ]]
-          [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]
-          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          [[ "$(git rev-list -n 1 "$RELEASE_TAG")" == "$GITHUB_SHA" ]]
+          # Dispatching at the release tag is the normal path. Dispatching
+          # from main finalizes an existing tag after a finalizer defect,
+          # because the workflow tree recorded at a protected tag can never
+          # change. The checkout above is pinned to the tag either way, so
+          # the release commit is derived from the tag, not from the ref
+          # that carried the workflow definition.
+          [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" || "$GITHUB_REF" == "refs/heads/main" ]]
+          release_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          [[ "$(git rev-parse HEAD)" == "$release_commit" ]]
 
           manifest_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r \
             --arg name "$PACKAGE_NAME" '.packages[] | select(.name == $name) | .version')"
           [[ "$manifest_version" == "$RELEASE_VERSION" ]]
 
-          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
+          # The by-tag release endpoint returns 404 for drafts, so select
+          # the release from the listing by its recorded tag name.
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+            jq -ce --arg tag "$RELEASE_TAG" '
+              [.[] | select(.tag_name == $tag)] |
+              if length == 1 then .[0]
+              else error("expected exactly one release for the tag") end
+            ')"
           jq -e --arg tag "$RELEASE_TAG" '
             .tag_name == $tag and
             (.draft | type == "boolean") and
@@ -98,8 +111,11 @@ jobs:
             state=published
           fi
 
-          echo "state=$state" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$(jq -r '.prerelease' <<< "$release_json")" >> "$GITHUB_OUTPUT"
+          {
+            echo "state=$state"
+            echo "prerelease=$(jq -r '.prerelease' <<< "$release_json")"
+            echo "commit=$release_commit"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install the pinned CycloneDX validator
         run: |
@@ -122,6 +138,7 @@ jobs:
       - name: Fetch and authenticate the published crate
         if: steps.inspect.outputs.state == 'draft'
         env:
+          RELEASE_COMMIT: ${{ steps.inspect.outputs.commit }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
@@ -178,7 +195,7 @@ jobs:
 
           crate_root="crate-source/$archive_root"
           vcs_info="$crate_root/.cargo_vcs_info.json"
-          jq -e --arg sha "$GITHUB_SHA" '
+          jq -e --arg sha "$RELEASE_COMMIT" '
             .git.sha1 == $sha and ((.git.dirty // false) != true)
           ' "$vcs_info" >/dev/null
           package_identity="$(cargo metadata --manifest-path "$crate_root/Cargo.toml" \
@@ -321,8 +338,8 @@ jobs:
             "dist/${PACKAGE_NAME}-${RELEASE_VERSION}.provenance.sigstore.json" \
             "dist/${PACKAGE_NAME}-${RELEASE_VERSION}.sbom.sigstore.json"
 
-          assets="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-            --jq '[.assets[].name] | sort')"
+          assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '[.assets[].name] | sort')"
           expected="$(jq -cn --arg version "$RELEASE_VERSION" '[
             "SHA256SUMS",
             "conpty-oxide-\($version).cdx.json",
@@ -360,9 +377,13 @@ jobs:
           "$RUNNER_TEMP/cyclonedx-cli" validate --input-file "$sbom" \
             --input-format json --input-version v1_5 --fail-on-errors
 
+          # Verification binds the signing workflow, the repository, and the
+          # artifact digests. The dispatch ref is deliberately not pinned:
+          # the finalizer may run from main to repair an existing tag, and
+          # the registry checksum and VCS checks already bind the artifacts
+          # to the tagged commit.
           gh attestation trusted-root > "$RUNNER_TEMP/trusted-root.jsonl"
           common=(--repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW"
-            --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$GITHUB_SHA"
             --deny-self-hosted-runners --format json)
           gh attestation verify "$crate" "${common[@]}" > "$RUNNER_TEMP/provenance-online.json"
           gh attestation verify "$sbom" "${common[@]}" > "$RUNNER_TEMP/provenance-sbom-online.json"
@@ -407,6 +428,7 @@ jobs:
       - name: Consume and verify the published release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.inspect.outputs.commit }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
@@ -440,7 +462,7 @@ jobs:
           tar -xOzf "$crate" \
             "${PACKAGE_NAME}-${RELEASE_VERSION}/.cargo_vcs_info.json" \
             > "$RUNNER_TEMP/published-vcs-info.json"
-          jq -e --arg sha "$GITHUB_SHA" '
+          jq -e --arg sha "$RELEASE_COMMIT" '
             .git.sha1 == $sha and ((.git.dirty // false) != true)
           ' "$RUNNER_TEMP/published-vcs-info.json" >/dev/null
 
@@ -457,7 +479,6 @@ jobs:
 
           gh attestation trusted-root > "$RUNNER_TEMP/published-trusted-root.jsonl"
           common=(--repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW"
-            --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$GITHUB_SHA"
             --deny-self-hosted-runners --format json)
           gh attestation verify "$crate" "${common[@]}" > "$RUNNER_TEMP/published-provenance-online.json"
           gh attestation verify "$sbom" "${common[@]}" > "$RUNNER_TEMP/published-provenance-sbom-online.json"

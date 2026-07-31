@@ -75,10 +75,16 @@ enabled, release-plz performs the following sequence:
 
 The SLSA predicate records the hosted finalizer that authenticated and promoted
 the crates.io artifact. It is not a claim of an independent reproducible build
-or of a particular SLSA build level.
+or of a particular SLSA build level. Attestation verification binds the signing
+workflow, the repository, and the artifact digests; the registry checksum and
+VCS checks bind those artifacts to the tagged commit, so the finalizer's
+dispatch ref is not pinned.
 
 If finalization fails before publication, the release remains a mutable draft.
-Fix the cause and re-run `release-finalize.yml` at the existing tag; never
+Fix the cause and re-run `release-finalize.yml` at the existing tag. If the
+defect is in the finalizer itself, fix it on `main` and dispatch from `main`
+with the same inputs: the tag's recorded workflow tree cannot change, and the
+workflow checks out the tag it finalizes either way. Never
 replace the tag or publish the incomplete draft manually. If publication
 succeeded but its eventual immutable-release verification failed, re-run the
 same tag: the workflow takes its published, verify-only path.
