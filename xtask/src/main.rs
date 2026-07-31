@@ -13,6 +13,7 @@ mod package_check;
 mod public_api;
 mod source_policy;
 mod util;
+mod verify_release;
 mod workflow_shells;
 
 use std::process::ExitCode;
@@ -24,10 +25,11 @@ fn main() -> ExitCode {
         Some("package-check") => package_check::run(),
         Some("public-api") => public_api::run(&arguments[1..]),
         Some("source-policy") => source_policy::run(),
+        Some("verify-release") => verify_release::run(&arguments[1..]),
         Some("workflow-shells") => workflow_shells::run(&arguments[1..]),
         Some(other) => Err(anyhow::anyhow!(
             "unknown xtask subcommand `{other}`; available: fetch-conpty, package-check, \
-             public-api, source-policy, workflow-shells"
+             public-api, source-policy, verify-release, workflow-shells"
         )),
         None => Err(anyhow::anyhow!(
             "usage: cargo run --manifest-path xtask/Cargo.toml -- <subcommand>"

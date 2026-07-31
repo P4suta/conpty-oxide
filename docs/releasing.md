@@ -155,7 +155,7 @@ and return the gate to `false` after the release workflow completes.
 After publication, verify the distributed bytes independently:
 
 ```powershell
-pwsh -NoProfile -File scripts/verify-release.ps1 -Tag v0.1.0
+just verify-release v0.1.0
 ```
 
 The scheduled release-integrity workflow runs the same verification for the
