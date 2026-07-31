@@ -39,6 +39,8 @@ The project supports Rust 1.75 and the three MSVC Windows targets listed in
   Open an issue before adding advanced lifecycle controls or a platform facade.
 - Treat each raw handle and `HPCON` as singly owned. Every unsafe block needs a
   local safety argument, and every callback must prevent unwinding across FFI.
+- Prefer static dispatch throughout project-owned code. The trait object
+  required by the standard `Error::source` method is the sole exception.
 - Test teardown in adversarial drop orders and cancellation points. A passing
   happy-path spawn test is not enough for lifecycle code.
 - Add or update documentation and `CHANGELOG.md` for user-visible behavior.

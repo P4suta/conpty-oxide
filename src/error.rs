@@ -4,7 +4,6 @@
 
 //! Stable error classifications with opaque diagnostic context.
 
-use std::error;
 #[cfg(any(feature = "blocking", feature = "tokio", test))]
 use std::ffi::OsString;
 use std::fmt;
@@ -18,7 +17,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// The classification is the stable part of the error contract. Diagnostic
 /// context remains available through [`Display`](fmt::Display),
-/// [`Debug`](fmt::Debug), and the [`source`](error::Error::source) chain
+/// [`Debug`](fmt::Debug), and the [`source`](std::error::Error::source) chain
 /// without making that context part of the crate's `SemVer` surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -231,8 +230,8 @@ impl fmt::Debug for Error {
     }
 }
 
-impl error::Error for Error {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.repr.source()
     }
 }
@@ -381,8 +380,8 @@ impl fmt::Debug for BackendError {
     }
 }
 
-impl error::Error for BackendError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+impl std::error::Error for BackendError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.repr.source()
     }
 }
