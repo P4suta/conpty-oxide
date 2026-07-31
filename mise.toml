@@ -6,9 +6,6 @@
 cargo.binstall = true
 
 [env]
-# PowerShell modules are not installed by a mise backend. Keeping the version
-# here gives the bootstrap and CI recipes one shared, reviewable pin.
-PSSCRIPTANALYZER_VERSION = "1.25.0"
 # rustdoc JSON is nightly-only. Keep public API snapshots reproducible instead
 # of silently moving them with the nightly channel.
 PUBLIC_API_TOOLCHAIN = "nightly-2026-07-02"
