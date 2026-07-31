@@ -134,7 +134,7 @@ mutants-ci shard: fetch-conpty
 
 # Build and smoke-test the exact normalized source Cargo would publish.
 package-check:
-    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-package.ps1
+    cargo run --manifest-path xtask/Cargo.toml --locked -- package-check
 
 # Verify the latest immutable release, or the supplied v-prefixed tag.
 verify-release tag='':
