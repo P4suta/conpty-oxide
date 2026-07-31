@@ -80,7 +80,6 @@
     doc = "adds a symmetric `conpty_oxide::tokio` frontend.",
     doc = ""
 )]
-//! # Choosing a `ConPTY` implementation
 //! # Managed sessions
 //!
 //! A managed session is bounded by its root process. Once the root's real exit
@@ -93,6 +92,7 @@
 //! stdout and stderr channels. `collect_output` retains an unbounded amount of
 //! output; use `wait` to discard it safely or owned parts to stream it.
 //!
+//! # Choosing a `ConPTY` implementation
 //!
 //! Automatic selection needs no setup: it prefers a validated standalone
 //! `conpty.dll` bundle next to the executable, then falls back to the operating

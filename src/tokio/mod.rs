@@ -83,7 +83,6 @@ pub use session::{Session, SessionParts};
 #[cfg(test)]
 use crate::backend::{BackendKind, ConPtyBackend};
 #[cfg(test)]
-#[cfg(test)]
 use crate::size::Size;
 #[cfg(test)]
 use crate::status::ExitStatus;
