@@ -67,10 +67,11 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           $directory = Join-Path $env:RUNNER_TEMP 'verified-release'
-          $result = @(& ./scripts/verify-release.ps1 `
-              -Tag $env:RELEASE_TAG `
-              -Repository $env:GITHUB_REPOSITORY `
-              -OutputDirectory $directory)
+          $result = @(& cargo run --manifest-path xtask/Cargo.toml --locked -- `
+              verify-release `
+              --tag $env:RELEASE_TAG `
+              --repository $env:GITHUB_REPOSITORY `
+              --output-directory $directory)
           if ($result.Count -ne 1) {
               throw "Release verifier returned $($result.Count) output paths; expected one."
           }

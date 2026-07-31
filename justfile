@@ -138,7 +138,7 @@ package-check:
 
 # Verify the latest immutable release, or the supplied v-prefixed tag.
 verify-release tag='':
-    pwsh.exe -NoLogo -NoProfile -File scripts/verify-release.ps1 -Tag '{{ tag }}'
+    cargo run --manifest-path xtask/Cargo.toml --locked -- verify-release --tag '{{ tag }}'
 
 # Refuse to release from a commit that does not exactly match the worktree.
 clean-worktree:
