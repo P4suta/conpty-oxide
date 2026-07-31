@@ -36,6 +36,8 @@ jobs:
       id-token: write
     env:
       PACKAGE_NAME: conpty-oxide
+      # crates.io rejects requests without a descriptive User-Agent.
+      CRATES_IO_USER_AGENT: conpty-oxide-release-finalize (https://github.com/P4suta/conpty-oxide)
       CYCLONEDX_CLI_VERSION: 0.33.1
       CYCLONEDX_CLI_SHA256: bfc8b2538da86fe239bc53658bbb63c1c8c510a293c1e6891aa5bea5d3c58746
       CYCLONEDX_PREDICATE: https://cyclonedx.org/bom
@@ -150,7 +152,7 @@ jobs:
           downloaded=false
           for attempt in $(seq 1 30); do
             if curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-              "$download_url" --output "$crate"; then
+              --user-agent "$CRATES_IO_USER_AGENT" "$download_url" --output "$crate"; then
               downloaded=true
               break
             fi
@@ -162,6 +164,7 @@ jobs:
           indexed=false
           for attempt in $(seq 1 30); do
             curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              --user-agent "$CRATES_IO_USER_AGENT" \
               -H 'Cache-Control: no-cache' "$index_url" --output "$RUNNER_TEMP/crates-index.jsonl"
             entry="$(jq -sc --arg version "$RELEASE_VERSION" \
               '[.[] | select(.vers == $version)] | if length == 1 then .[0] else empty end' \
@@ -455,6 +458,7 @@ jobs:
           distribution_url="https://crates.io/api/v1/crates/${PACKAGE_NAME}/${RELEASE_VERSION}/download"
 
           index_entry="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+            --user-agent "$CRATES_IO_USER_AGENT" \
             -H 'Cache-Control: no-cache' "https://index.crates.io/co/np/${PACKAGE_NAME}" |
             jq -sc --arg version "$RELEASE_VERSION" \
               '[.[] | select(.vers == $version)] | if length == 1 then .[0] else error("version missing") end')"
