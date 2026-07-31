@@ -21,7 +21,7 @@ include = [
   "/examples/**",
   "/README.md",
   "/CHANGELOG.md",
-  "/docs/**",
+  "/docs/conpty-pitfalls.md",
   "/REUSE.toml",
   "/LICENSE-APACHE",
   "/LICENSE-MIT",
