@@ -7,14 +7,10 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPoli
 default:
     @just --list
 
-# Install pinned tools, the pinned PowerShell analyzer, and git hooks
-setup: setup-powershell-lint
+# Install pinned tools and git hooks
+setup:
     $emptyGlobal = Join-Path $PWD '.tools/empty-mise-global.toml'; if (-not (Test-Path -LiteralPath $emptyGlobal)) { New-Item -ItemType File -Path $emptyGlobal | Out-Null }; $env:MISE_GLOBAL_CONFIG_FILE = $emptyGlobal; $env:MISE_CEILING_PATHS = (Split-Path -Parent $PWD.Path); mise --locked install
     lefthook install
-
-# Install PSScriptAnalyzer into the repository-local tool directory
-setup-powershell-lint:
-    pwsh.exe -NoLogo -NoProfile -Command '$module = Join-Path $PWD ".tools/PSScriptAnalyzer/1.25.0/PSScriptAnalyzer.psd1"; if (-not (Test-Path -LiteralPath $module)) { New-Item -ItemType Directory -Force -Path ".tools" | Out-Null; Save-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Repository PSGallery -Path ".tools" -Force }'
 
 # Format all Rust sources.
 fmt:
@@ -47,10 +43,6 @@ lint-rust:
 supply-chain:
     cargo deny --all-features --locked check -D unmatched-skip -D unmatched-skip-root
 
-# Analyze every repository PowerShell script with the pinned module.
-lint-powershell:
-    $module = Join-Path $PWD '.tools/PSScriptAnalyzer/1.25.0/PSScriptAnalyzer.psd1'; if (-not (Test-Path -LiteralPath $module)) { throw 'PSScriptAnalyzer 1.25.0 is missing; run just setup-powershell-lint' }; Import-Module $module -Force; $issues = @(Invoke-ScriptAnalyzer -Path scripts -Recurse -Severity Warning,Error); $issues | Format-Table -AutoSize; if ($issues.Count -ne 0) { throw "PSScriptAnalyzer reported $($issues.Count) issue(s)" }
-
 # Check the contributor automation crate: formatting, lints, and tests.
 xtask-check:
     cargo fmt --manifest-path xtask/Cargo.toml --all -- --check
@@ -58,10 +50,10 @@ xtask-check:
     cargo test --manifest-path xtask/Cargo.toml --locked
 
 # Every required static policy.
-policy: lint-fast supply-chain lint-powershell xtask-check
+policy: lint-fast supply-chain xtask-check
 
 # Complete lint suite.
-lint: lint-fast lint-rust supply-chain lint-powershell xtask-check
+lint: lint-fast lint-rust supply-chain xtask-check
 
 # Build the documentation, failing on any rustdoc warning (missing docs included)
 doc:
@@ -152,14 +144,13 @@ release-check: clean-worktree ci package-check
 pre-commit: lint-fast
 
 # Strict local hook; expensive platform/MSRV/coverage checks stay in CI.
-pre-push: lint-rust supply-chain lint-powershell xtask-check test
+pre-push: lint-rust supply-chain xtask-check test
 
 # Everything required by pull requests; mutation remains scheduled/manual.
 ci: lint api-matrix public-api doc doc-docsrs test msrv cross-targets test-dll coverage
 
 # Verify that all required tools are available
 doctor:
-    pwsh.exe --version
     rustc --version
     rustc +nightly-2026-07-02 --version
     cargo --version

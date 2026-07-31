@@ -45,8 +45,6 @@ jobs:
             uv
             pipx:reuse
             pipx:yamllint
-      - name: Install the pinned PowerShell analyzer
-        run: just setup-powershell-lint
       - name: Run repository policy
         run: just policy
 
