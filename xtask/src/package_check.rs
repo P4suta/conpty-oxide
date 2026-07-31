@@ -20,7 +20,7 @@ use regex::Regex;
 
 use crate::util::repository_root;
 
-const REQUIRED_PATHS: [&str; 19] = [
+const REQUIRED_PATHS: [&str; 17] = [
     "Cargo.lock",
     "Cargo.toml",
     "Cargo.toml.orig",
@@ -33,8 +33,6 @@ const REQUIRED_PATHS: [&str; 19] = [
     "README.md",
     "REUSE.toml",
     "docs/conpty-pitfalls.md",
-    "docs/mutation-testing.md",
-    "docs/releasing.md",
     "examples/blocking_echo.rs",
     "examples/tokio_interactive.rs",
     "src/lib.rs",
@@ -42,11 +40,13 @@ const REQUIRED_PATHS: [&str; 19] = [
     "tests/public_api.rs",
 ];
 
-const FORBIDDEN_PATHS: [&str; 14] = [
+const FORBIDDEN_PATHS: [&str; 16] = [
     ".cargo/",
     ".github/",
     ".gitignore",
     ".tools/",
+    "docs/adr/",
+    "docs/releasing.md",
     "justfile",
     "lefthook.yml",
     "mise.lock",

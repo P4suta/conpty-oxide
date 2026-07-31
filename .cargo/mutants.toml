@@ -15,8 +15,8 @@ gitignore = true
 cap_lints = false
 
 # Individually audited equivalent mutations. Each expression below has a
-# proof in docs/mutation-testing.md; keep these regexes tied to one file,
-# function, operator, and replacement so new mutations remain visible.
+# proof in docs/adr/0001-mutation-testing.md; keep these regexes tied to one
+# file, function, operator, and replacement so new mutations remain visible.
 exclude_re = [
   'src/(blocking|tokio)/pty\.rs:.*replace Pty::builder -> PtyBuilder with Default::default\(\)',
   'src/tokio/pty\.rs:.*replace <impl AsyncWrite for (Pty|OwnedWriteHalf|ConinWriter)>::poll_flush .* with Poll::from\(Ok\(\(\)\)\)',
