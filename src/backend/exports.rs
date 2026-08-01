@@ -22,6 +22,9 @@ use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE};
 #[cfg(any(feature = "blocking", feature = "tokio", test))]
 use windows_sys::Win32::System::Console::COORD;
 use windows_sys::Win32::System::Console::HPCON;
+use windows_sys::Win32::System::Diagnostics::Debug::{
+    GetThreadErrorMode, SetThreadErrorMode, SEM_FAILCRITICALERRORS,
+};
 use windows_sys::Win32::System::LibraryLoader::{
     GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
 };
@@ -96,6 +99,41 @@ pub(super) unsafe fn resolve_export(module: HMODULE, name: &str) -> Option<ProcA
 #[derive(Debug)]
 pub(super) struct ModuleGuard {
     pub(super) module: HMODULE,
+}
+
+/// Restores the caller's thread error mode after one fallible loader call.
+///
+/// In particular, `LoadLibraryExW` can otherwise display a modal Bad Image
+/// dialog for a corrupt colocated DLL instead of only returning an error.
+struct ThreadErrorModeGuard {
+    previous: u32,
+}
+
+impl ThreadErrorModeGuard {
+    fn suppress_critical_error_dialogs() -> io::Result<Self> {
+        // SAFETY: GetThreadErrorMode has no preconditions and only reads the
+        // calling thread's error-mode flags.
+        let previous = unsafe { GetThreadErrorMode() };
+        let mut reported_previous = 0;
+        // SAFETY: reported_previous is a valid out-parameter. The new mode
+        // preserves every caller flag and adds only dialog suppression.
+        let changed = unsafe {
+            SetThreadErrorMode(previous | SEM_FAILCRITICALERRORS, &mut reported_previous)
+        };
+        if changed == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        debug_assert_eq!(reported_previous, previous);
+        Ok(Self { previous })
+    }
+}
+
+impl Drop for ThreadErrorModeGuard {
+    fn drop(&mut self) {
+        // SAFETY: restoration affects only the calling thread. A null
+        // out-parameter is allowed because the replaced value is irrelevant.
+        let _ = unsafe { SetThreadErrorMode(self.previous, ptr::null_mut()) };
+    }
 }
 
 // SAFETY: a module handle is an opaque, non-thread-affine base address.
@@ -236,6 +274,7 @@ impl ConptyApi {
 /// Loads an external DLL by absolute path under a restricted search policy.
 pub(super) fn load_module(dll: &Path) -> io::Result<ModuleGuard> {
     let path = wide_path(dll)?;
+    let _error_mode = ThreadErrorModeGuard::suppress_critical_error_dialogs()?;
 
     // SAFETY: `path` is a NUL-terminated absolute UTF-16 path. The search flags
     // restrict dependencies to the DLL's directory and System32.
@@ -259,4 +298,35 @@ pub(super) fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
     }
     wide.push(0);
     Ok(wide)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thread_error_mode_guard_preserves_existing_dialog_suppression() {
+        // SAFETY: GetThreadErrorMode has no preconditions.
+        let original = unsafe { GetThreadErrorMode() };
+        let preexisting = original | SEM_FAILCRITICALERRORS;
+        let mut ignored_previous = 0;
+        // SAFETY: ignored_previous is a valid out-parameter.
+        assert_ne!(
+            unsafe { SetThreadErrorMode(preexisting, &mut ignored_previous) },
+            0
+        );
+        let restore_original = ThreadErrorModeGuard { previous: original };
+
+        let guard = ThreadErrorModeGuard::suppress_critical_error_dialogs()
+            .expect("setting a valid thread error mode must succeed");
+        // SAFETY: GetThreadErrorMode has no preconditions.
+        assert_ne!(unsafe { GetThreadErrorMode() } & SEM_FAILCRITICALERRORS, 0);
+        drop(guard);
+        // SAFETY: GetThreadErrorMode has no preconditions.
+        assert_eq!(unsafe { GetThreadErrorMode() }, preexisting);
+
+        drop(restore_original);
+        // SAFETY: GetThreadErrorMode has no preconditions.
+        assert_eq!(unsafe { GetThreadErrorMode() }, original);
+    }
 }

@@ -34,11 +34,11 @@ use core::fmt;
 /// # }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[must_use]
 pub struct ExitStatus(u32);
 
 impl ExitStatus {
     /// Wraps a raw exit code obtained from `GetExitCodeProcess`.
+    #[must_use]
     #[cfg(any(feature = "blocking", feature = "tokio", test))]
     pub(super) const fn from_raw(code: u32) -> Self {
         Self(code)

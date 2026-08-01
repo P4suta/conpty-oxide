@@ -26,7 +26,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 #[cfg(feature = "tokio")]
 use std::pin::Pin;
 use std::ptr;
-#[cfg(all(feature = "tokio", test))]
+#[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 #[cfg(feature = "tokio")]
@@ -34,7 +34,6 @@ use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::Duration;
 
-#[cfg(feature = "tokio")]
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
 use windows_sys::Win32::Foundation::{
     HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
@@ -285,7 +284,6 @@ fn should_replace_waker(registered: Option<&Waker>, candidate: &Waker) -> bool {
     registered.map_or(true, |registered| !registered.will_wake(candidate))
 }
 
-#[cfg(feature = "tokio")]
 fn callback_unregister_transfers_cleanup(result: i32, error_code: Option<i32>) -> bool {
     result != 0 || error_code == i32::try_from(ERROR_IO_PENDING).ok()
 }
@@ -504,7 +502,14 @@ pub(super) fn spawn_root_watcher(
     grace: Duration,
     close_legacy: bool,
 ) -> io::Result<()> {
-    spawn_root_watcher_inner(process, job, shared, grace, close_legacy, true)
+    #[cfg(not(test))]
+    {
+        spawn_root_watcher_inner(process, job, shared, grace, close_legacy, true)
+    }
+    #[cfg(test)]
+    {
+        spawn_root_watcher_inner(process, job, shared, grace, close_legacy, true, None)
+    }
 }
 
 #[cfg(test)]
@@ -514,8 +519,17 @@ fn spawn_root_watcher_with_worker_spawn_failure(
     shared: Arc<ConsoleShared>,
     grace: Duration,
     close_legacy: bool,
+    cleanup_observer: Arc<AtomicBool>,
 ) -> io::Result<()> {
-    spawn_root_watcher_inner(process, job, shared, grace, close_legacy, false)
+    spawn_root_watcher_inner(
+        process,
+        job,
+        shared,
+        grace,
+        close_legacy,
+        false,
+        Some(cleanup_observer),
+    )
 }
 
 fn spawn_root_watcher_inner(
@@ -525,6 +539,7 @@ fn spawn_root_watcher_inner(
     grace: Duration,
     close_legacy: bool,
     spawn_close_worker: bool,
+    #[cfg(test)] cleanup_observer: Option<Arc<AtomicBool>>,
 ) -> io::Result<()> {
     let weak = Arc::downgrade(&shared);
     drop(shared);
@@ -538,6 +553,8 @@ fn spawn_root_watcher_inner(
         spawn_close_worker,
         wait_object: Mutex::new(None),
         wait_object_ready: Condvar::new(),
+        #[cfg(test)]
+        cleanup_observer,
     }));
     let mut wait_object: HANDLE = ptr::null_mut();
 
@@ -590,6 +607,18 @@ struct LegacyWaitContext {
     spawn_close_worker: bool,
     wait_object: Mutex<Option<HANDLE>>,
     wait_object_ready: Condvar,
+    /// Lets crate-local tests observe callback-tail reclamation directly.
+    #[cfg(test)]
+    cleanup_observer: Option<Arc<AtomicBool>>,
+}
+
+#[cfg(test)]
+impl Drop for LegacyWaitContext {
+    fn drop(&mut self) {
+        if let Some(observer) = &self.cleanup_observer {
+            observer.store(true, Ordering::Release);
+        }
+    }
 }
 
 /// A raw callback context transferred to the post-exit worker.
@@ -644,13 +673,27 @@ unsafe fn legacy_wait_callback_inner(raw: *mut c_void) {
         // Thread creation failure must not leave legacy conout waiting forever.
         // The LONGFUNCTION callback is permitted to perform the grace and close
         // work itself. It cannot use blocking UnregisterWaitEx from inside its
-        // own callback, so request nonblocking unregistration and retain the
-        // context: freeing it before this callback returns would be unsound.
+        // own callback, so request nonblocking unregistration and reclaim the
+        // context at this callback tail once Windows accepts ownership
+        // transfer. This is the same protocol used by RegisteredWait Drop
+        // during a reentrant callback.
         finish_root_exit(context);
         let wait_object = legacy_wait_object(context);
         // SAFETY: the wait object belongs to this registration. A null
         // completion event is the callback-safe, nonblocking form.
-        let _ = unsafe { UnregisterWaitEx(wait_object, ptr::null_mut()) };
+        let unregistered = unsafe { UnregisterWaitEx(wait_object, ptr::null_mut()) };
+        let unregister_error = io::Error::last_os_error();
+        if callback_unregister_transfers_cleanup(unregistered, unregister_error.raw_os_error()) {
+            // SAFETY: nonblocking unregistration transferred sole reclamation
+            // ownership to this one-shot callback. No code below accesses the
+            // allocation.
+            drop(unsafe { Box::from_raw(pointer.0) });
+        } else {
+            // The registration's relationship with its context is uncertain
+            // after an unexpected failure, so retaining it is the only
+            // memory-safe recovery.
+            log_unregister_failure(&unregister_error);
+        }
         log_legacy_worker_failure(&err);
     }
 }
@@ -744,7 +787,7 @@ fn log_legacy_worker_failure(err: &io::Error) {
 fn log_legacy_worker_failure_inner(err: &io::Error) {
     tracing::error!(
         error = %err,
-        "failed to spawn legacy close worker; completed close in callback and retained context"
+        "failed to spawn legacy close worker; completed close in callback"
     );
 }
 

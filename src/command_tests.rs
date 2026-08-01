@@ -219,13 +219,14 @@ fn env_inherits_parent_and_sorts_case_insensitively() {
         "override missing from block"
     );
     assert!(pairs.len() > 1, "parent environment was not inherited");
-    // Strictly increasing by uppercased UTF-16 units: sorted and deduped.
-    let upcased: Vec<Vec<u16>> = pairs
+    // Strictly increasing by Windows ordinal ignore-case keys: sorted and
+    // deduplicated with the same comparison CreateProcessW expects.
+    let keys: Vec<EnvKey> = pairs
         .iter()
-        .map(|(k, _)| upcased_wide(OsStr::new(k)))
+        .map(|(k, _)| EnvKey::new(OsStr::new(k)).unwrap())
         .collect();
     assert!(
-        upcased.windows(2).all(|w| w[0] < w[1]),
+        keys.windows(2).all(|w| w[0] < w[1]),
         "block is not sorted case-insensitively: {pairs:?}"
     );
 }
@@ -266,6 +267,43 @@ fn env_override_is_case_insensitive_and_keeps_first_casing() {
         parse_env_block(&block),
         vec![("FOO".to_string(), "2".to_string())]
     );
+}
+
+#[test]
+fn env_uses_windows_case_folding_for_non_ascii_keys() {
+    // Rust Unicode uppercasing maps long-s to S and micro-sign to Greek mu,
+    // but Windows CompareStringOrdinal deliberately treats both pairs as
+    // distinct environment keys.
+    let mut cmd = Command::new("prog");
+    cmd.env_clear()
+        .env("S", "latin-s")
+        .env("ſ", "long-s")
+        .env("Μ", "greek-mu")
+        .env("µ", "micro-sign");
+    let pairs = parse_env_block(&cmd.build_environment_block().unwrap().unwrap());
+
+    assert_eq!(pairs.len(), 4, "Windows-distinct keys were overwritten");
+    for expected in [
+        ("S", "latin-s"),
+        ("ſ", "long-s"),
+        ("Μ", "greek-mu"),
+        ("µ", "micro-sign"),
+    ] {
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == expected.0 && value == expected.1),
+            "missing Windows-distinct environment entry {expected:?}: {pairs:?}"
+        );
+    }
+}
+
+#[test]
+fn env_key_equality_matches_windows_ordinal_comparison() {
+    let key = |text: &str| EnvKey::new(OsStr::new(text)).unwrap();
+
+    assert_eq!(key("PATH"), key("path"));
+    assert_ne!(key("S"), key("ſ"));
 }
 
 #[test]

@@ -12,13 +12,17 @@ with Cargo's additional pre-1.0 compatibility rules.
 
 ## [Unreleased]
 
-### Changed
-
-- `ExitStatus` and `SessionOutput` are `#[must_use]` types: discarding a
-  collected status or output now warns, as with `std::process::ExitStatus`.
+## [0.1.1] - 2026-08-01
 
 ### Fixed
 
+- Environment blocks use Windows' native ordinal ignore-case comparison, so
+  non-ASCII variable names that Windows treats as distinct are not overwritten
+  or removed as aliases.
+- A malformed external `conpty.dll` now returns a loader error without showing
+  a modal Bad Image dialog, while preserving the caller's thread error mode.
+- The legacy root watcher reclaims its registered-wait context and duplicated
+  process handle when its post-exit worker cannot be created.
 - Bundle version validation keeps the leading digits of a labeled version
   component, so two different labeled builds no longer compare as a
   matching pair.
@@ -53,5 +57,6 @@ Version 0.1 is Windows-only and requires Windows 10 version 1809 or later.
 Detached sessions, manual EOF policy, cursor inheritance, pre-staged spawn,
 and a cross-platform facade are intentionally outside the 0.1 API.
 
-[Unreleased]: https://github.com/P4suta/conpty-oxide/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/P4suta/conpty-oxide/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/P4suta/conpty-oxide/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/P4suta/conpty-oxide/releases/tag/v0.1.0

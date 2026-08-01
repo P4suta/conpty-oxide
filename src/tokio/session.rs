@@ -249,10 +249,9 @@ async fn collect_until_root(
         match event {
             CollectionEvent::Root(status) => break status?,
             CollectionEvent::Output(Ok(0)) => output_finished = true,
-            CollectionEvent::Output(Ok(read)) if collect => {
-                bytes.extend_from_slice(&chunk[..read]);
+            CollectionEvent::Output(Ok(read)) => {
+                append_collected(bytes, &chunk[..read], collect);
             },
-            CollectionEvent::Output(Ok(_read)) => {},
             CollectionEvent::Output(Err(err)) => return Err(err.into()),
         }
     };
@@ -279,9 +278,13 @@ async fn drain_to_end(
         if read == 0 {
             return Ok(());
         }
-        if collect {
-            bytes.extend_from_slice(&chunk[..read]);
-        }
+        append_collected(bytes, &chunk[..read], collect);
+    }
+}
+
+fn append_collected(bytes: &mut Vec<u8>, chunk: &[u8], collect: bool) {
+    if collect {
+        bytes.extend_from_slice(chunk);
     }
 }
 
@@ -332,5 +335,23 @@ impl fmt::Debug for SessionParts {
             .field("child", &self.child)
             .field("controller", &self.controller)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_collected;
+
+    #[test]
+    fn discarded_chunks_do_not_grow_the_collection_buffer() {
+        let mut bytes = vec![1, 2, 3];
+        let initial_capacity = bytes.capacity();
+
+        append_collected(&mut bytes, &[4, 5, 6], false);
+        assert_eq!(bytes, [1, 2, 3]);
+        assert_eq!(bytes.capacity(), initial_capacity);
+
+        append_collected(&mut bytes, &[4, 5, 6], true);
+        assert_eq!(bytes, [1, 2, 3, 4, 5, 6]);
     }
 }
