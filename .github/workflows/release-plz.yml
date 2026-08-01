@@ -51,7 +51,6 @@ jobs:
         env:
           APP_CLIENT_ID: ${{ vars.RELEASE_PLZ_APP_CLIENT_ID }}
           APP_PRIVATE_KEY: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
-          BOOTSTRAP_CARGO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           RELEASE_ENABLED: ${{ vars.RELEASE_ENABLED }}
         run: |
           if [[ -n "$RELEASE_ENABLED" && "$RELEASE_ENABLED" != "true" && "$RELEASE_ENABLED" != "false" ]]; then
@@ -68,16 +67,10 @@ jobs:
           if [[ -z "$APP_CLIENT_ID" || -z "$APP_PRIVATE_KEY" ]]; then
             echo "::notice::Release automation is dormant until the release environment secret is configured."
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "bootstrap-token=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "ready=true" >> "$GITHUB_OUTPUT"
-          if [[ -n "$BOOTSTRAP_CARGO_TOKEN" ]]; then
-            echo "bootstrap-token=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "bootstrap-token=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Mint the release GitHub App token
         id: app-token
@@ -195,31 +188,12 @@ jobs:
         if: >-
           steps.preflight.outputs.ready == 'true' &&
           steps.freshness.outputs.current == 'true' &&
-          steps.preflight.outputs.publish_enabled == 'true' &&
-          steps.preflight.outputs.bootstrap-token == 'false'
+          steps.preflight.outputs.publish_enabled == 'true'
         uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9  # v0.5.131
         with:
           command: release
           version: 0.3.160
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-
-      # crates.io cannot configure a trusted publisher before a crate exists.
-      # CARGO_REGISTRY_TOKEN is therefore an optional, first-release-only
-      # environment secret and should be removed immediately after v0.1.0.
-      - name: Publish the first release with a bootstrap token
-        id: release-bootstrap
-        if: >-
-          steps.preflight.outputs.ready == 'true' &&
-          steps.freshness.outputs.current == 'true' &&
-          steps.preflight.outputs.publish_enabled == 'true' &&
-          steps.preflight.outputs.bootstrap-token == 'true'
-        uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9  # v0.5.131
-        with:
-          command: release
-          version: 0.3.160
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Validate release-plz output
@@ -227,10 +201,8 @@ jobs:
         if: steps.preflight.outputs.ready == 'true'
         shell: bash
         env:
-          RELEASES: >-
-            ${{ steps.release-bootstrap.outputs.releases || steps.release-trusted.outputs.releases }}
-          RELEASES_CREATED: >-
-            ${{ steps.release-bootstrap.outputs.releases_created || steps.release-trusted.outputs.releases_created }}
+          RELEASES: ${{ steps.release-trusted.outputs.releases }}
+          RELEASES_CREATED: ${{ steps.release-trusted.outputs.releases_created }}
         run: |
           set -euo pipefail
 

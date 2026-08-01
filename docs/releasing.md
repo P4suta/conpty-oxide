@@ -8,16 +8,16 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 ## Public API baseline
 
-Until `v0.1.0` is published, the four files under `public-api/` are the API
-baseline. Every change requires reviewing all four feature shapes and then
-running `just public-api-update`. Cargo's pre-1.0 compatibility rules still
-apply, but they are not sufficient on their own: a `0.2` API snapshot change
-also requires explicit review and approval.
+The four files under `public-api/` are the reviewed API baseline. Every
+change requires reviewing all four feature shapes and then running
+`just public-api-update`. Cargo's pre-1.0 compatibility rules still apply,
+but they are not sufficient on their own: a `0.2` API snapshot change also
+requires explicit review and approval.
 
-After the `v0.1.0` tag exists, pin `cargo-semver-checks` before preparing the
-first patch release. Run it against the tagged baseline separately for no
-frontend, `blocking`, `tokio`, and both frontends. Keep the snapshot gate as a
-second, human-reviewable check.
+Pin `cargo-semver-checks` before preparing the first patch release. Run it
+against the tagged `v0.1.0` baseline separately for no frontend, `blocking`,
+`tokio`, and both frontends. Keep the snapshot gate as a second,
+human-reviewable check.
 
 ## Repository setup
 
@@ -42,6 +42,10 @@ Add the permanent secret
 `RELEASE_PLZ_APP_PRIVATE_KEY` for the installed `p4suta-release-plz` App. The
 App needs repository **Contents: read/write** and **Pull requests:
 read/write**; it does not need Administration access.
+
+The crates.io trusted publisher is owner `P4suta`, repository `conpty-oxide`,
+workflow `release-plz.yml`, Environment `release`. Publication uses only the
+short-lived OIDC exchange; no registry token exists anywhere.
 
 ## Automated release flow
 
@@ -88,41 +92,6 @@ workflow checks out the tag it finalizes either way. Never
 replace the tag or publish the incomplete draft manually. If publication
 succeeded but its eventual immutable-release verification failed, re-run the
 same tag: the workflow takes its published, verify-only path.
-
-## First publication
-
-crates.io Trusted Publishing cannot create a new crate. Bootstrap `v0.1.0`
-with a short-lived crates.io token. The first release pull request is prepared
-once on the `release-plz-v0.1.0` branch: it moves the curated notes from
-`Unreleased` to `0.1.0` and enables automatic changelog updates. This preserves
-the same reviewed-PR release gate without asking release-plz to reconstruct the
-project's curated initial history.
-
-1. Add `CARGO_REGISTRY_TOKEN` to the `release` Environment with only
-   `publish-new` and `publish-update` scopes. Keep the token out of repository
-   and command-line logs. Add `RELEASE_PLZ_APP_PRIVATE_KEY` there as well, and
-   confirm `RELEASE_ENABLED=false`.
-2. Reconfirm immediately before merging that `conpty-oxide` is still available
-   on crates.io; the dry-run does not reserve the name.
-3. Run `just release-check` on the release commit. Review
-   `cargo package --list --locked`, then push it and require every pull-request
-   check to pass.
-4. Review and merge the prepared `release-plz-v0.1.0` pull request while the
-   publish gate is still false. Confirm that it changes only the release state
-   described above; the branch prefix is the release-plz contract that
-   authorizes publication with `release_always = false`.
-5. Reconfirm that this exact `main` SHA passed CI, set `RELEASE_ENABLED=true`,
-   and manually dispatch `Release-plz` from `main`. Do not push another commit.
-6. Wait for crates.io publication, finalization, immutable-release verification,
-   and the docs.rs builds for all documented features and Windows targets.
-7. Set `RELEASE_ENABLED=false` again. Once the crate and docs.rs links resolve,
-   enable the compact crates.io and docs.rs badges if they were not already
-   prepared.
-8. On crates.io, configure the trusted publisher as owner `P4suta`, repository
-   `conpty-oxide`, workflow `release-plz.yml`, Environment `release`.
-9. Delete the Environment token and revoke it on crates.io immediately after
-   saving the trusted publisher. Confirm the next release logs show the OIDC
-   exchange; later releases use only short-lived credentials.
 
 ## Registry and GitHub reconciliation
 
