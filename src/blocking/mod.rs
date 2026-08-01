@@ -47,12 +47,6 @@
 //!
 //! # Examples
 //!
-//! Shared control types have one canonical path at the crate root:
-//!
-//! ```compile_fail
-//! use conpty_oxide::blocking::PtyController;
-//! ```
-//!
 //! ```no_run
 //! use conpty_oxide::blocking::Command;
 //!
@@ -87,3 +81,11 @@ use crate::{ConPtyBackend, ExitStatus, Size};
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+/// Shared control types keep one canonical path at the crate root:
+///
+/// ```compile_fail
+/// use conpty_oxide::blocking::PtyController;
+/// ```
+#[cfg(doctest)]
+mod api_boundary {}

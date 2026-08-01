@@ -51,12 +51,6 @@
 //!
 //! # Examples
 //!
-//! Shared control types have one canonical path at the crate root:
-//!
-//! ```compile_fail
-//! use conpty_oxide::tokio::PtyController;
-//! ```
-//!
 //! ```no_run
 //! use conpty_oxide::tokio::Command;
 //!
@@ -94,3 +88,11 @@ use std::{io, sync::Arc};
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+/// Shared control types keep one canonical path at the crate root:
+///
+/// ```compile_fail
+/// use conpty_oxide::tokio::PtyController;
+/// ```
+#[cfg(doctest)]
+mod api_boundary {}
