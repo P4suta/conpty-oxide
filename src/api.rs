@@ -60,14 +60,8 @@ impl SessionOptions {
 /// stderr channels, so this type intentionally does not pretend otherwise.
 ///
 /// The byte buffer may be large, so collecting output does not also make it
-/// implicitly cloneable:
-///
-/// ```compile_fail
-/// use conpty_oxide::SessionOutput;
-///
-/// fn require_clone<T: Clone>() {}
-/// require_clone::<SessionOutput>();
-/// ```
+/// implicitly cloneable; a hidden compile-fail doctest pins the missing
+/// `Clone`.
 pub struct SessionOutput {
     status: ExitStatus,
     bytes: Vec<u8>,
@@ -191,3 +185,14 @@ impl fmt::Debug for PtyController {
             .finish_non_exhaustive()
     }
 }
+
+/// [`SessionOutput`] never becomes implicitly cloneable:
+///
+/// ```compile_fail
+/// use conpty_oxide::SessionOutput;
+///
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<SessionOutput>();
+/// ```
+#[cfg(doctest)]
+mod api_boundary {}

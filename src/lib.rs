@@ -17,40 +17,10 @@
 //! This crate targets Windows exclusively and does not compile on other
 //! platforms.
 //!
-//! Low-level lifecycle types are intentionally not part of the 0.1 contract:
-//!
-//! ```compile_fail
-//! use conpty_oxide::blocking::Pty;
-//! ```
-//!
-//! ```compile_fail
-//! use conpty_oxide::tokio::PtyBuilder;
-//! ```
-//!
-//! Backend identity and unchecked bundle loading are private implementation
-//! details:
-//!
-//! ```compile_fail
-//! use conpty_oxide::BackendKind;
-//! ```
-//!
-//! ```compile_fail
-//! let backend = conpty_oxide::ConPtyBackend::from_dir_unchecked(".");
-//! ```
-//!
-//! Errors are opaque and the result alias always uses this crate's error:
-//!
-//! ```compile_fail
-//! fn inspect(error: conpty_oxide::Error) {
-//!     match error {
-//!         conpty_oxide::Error::Io(_) => {}
-//!     }
-//! }
-//! ```
-//!
-//! ```compile_fail
-//! type ForeignResult = conpty_oxide::Result<(), std::io::Error>;
-//! ```
+//! Low-level lifecycle types, backend identity, and unchecked bundle loading
+//! are intentionally not part of the 0.1 contract. Errors are opaque — there
+//! are no variants to match — and [`Result`] always uses this crate's error.
+//! Hidden compile-fail doctests pin each of these boundaries.
 //!
 //! # Where to start
 //!
@@ -169,3 +139,44 @@ pub use backend::ConPtyBackend;
 pub use error::{BackendError, BackendErrorKind, Error, ErrorKind, Result};
 pub use size::Size;
 pub use status::ExitStatus;
+
+/// The API boundaries stated in the crate docs, pinned as compile-fail
+/// doctests so a widened surface fails `cargo test --doc` instead of
+/// shipping. The module exists only while rustdoc collects doctests, so
+/// none of these render as examples.
+///
+/// Low-level lifecycle types stay private:
+///
+/// ```compile_fail
+/// use conpty_oxide::blocking::Pty;
+/// ```
+///
+/// ```compile_fail
+/// use conpty_oxide::tokio::PtyBuilder;
+/// ```
+///
+/// Backend identity and unchecked bundle loading stay private:
+///
+/// ```compile_fail
+/// use conpty_oxide::BackendKind;
+/// ```
+///
+/// ```compile_fail
+/// let backend = conpty_oxide::ConPtyBackend::from_dir_unchecked(".");
+/// ```
+///
+/// Errors stay opaque and the result alias keeps this crate's error:
+///
+/// ```compile_fail
+/// fn inspect(error: conpty_oxide::Error) {
+///     match error {
+///         conpty_oxide::Error::Io(_) => {}
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// type ForeignResult = conpty_oxide::Result<(), std::io::Error>;
+/// ```
+#[cfg(doctest)]
+mod api_boundary {}

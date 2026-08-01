@@ -35,31 +35,9 @@ use super::session::Session;
 ///   what makes [`Child::kill`] terminate the whole tree.
 ///
 /// A command is intentionally not `Clone`: managed spawning must not copy or
-/// mutate its potentially large argument and environment buffers.
-///
-/// ```compile_fail
-/// use conpty_oxide::tokio::Command;
-///
-/// fn requires_clone<T: Clone>() {}
-/// requires_clone::<Command>();
-/// ```
-///
-/// Low-level lifecycle and unvalidated process flags are intentionally absent:
-///
-/// ```compile_fail
-/// let mut command = conpty_oxide::tokio::Command::new("cmd.exe");
-/// command.creation_flags(0);
-/// ```
-///
-/// ```compile_fail
-/// let mut command = conpty_oxide::tokio::Command::new("cmd.exe");
-/// command.kill_on_drop(false);
-/// ```
-///
-/// ```compile_fail
-/// let mut command = conpty_oxide::tokio::Command::new("cmd.exe");
-/// command.spawn_in(());
-/// ```
+/// mutate its potentially large argument and environment buffers. Low-level
+/// lifecycle and unvalidated process flags are intentionally absent; hidden
+/// compile-fail doctests pin both boundaries.
 #[derive(Debug)]
 pub struct Command {
     inner: crate::command::Command,
@@ -250,14 +228,8 @@ impl Command {
 /// still running.
 ///
 /// The process handle is available only through the lifetime-safe
-/// [`AsHandle`] implementation:
-///
-/// ```compile_fail
-/// use std::os::windows::io::AsRawHandle;
-///
-/// fn requires_raw_handle<T: AsRawHandle>() {}
-/// requires_raw_handle::<conpty_oxide::tokio::Child>();
-/// ```
+/// [`AsHandle`] implementation; a hidden compile-fail doctest pins the
+/// missing raw-handle escape hatch.
 pub struct Child {
     core: ChildCore,
     /// The in-flight Windows thread-pool wait. It stays in the child when a
@@ -377,3 +349,43 @@ impl AsHandle for Child {
         self.core.as_handle()
     }
 }
+
+/// The API boundaries stated on [`Command`] and [`Child`], pinned as
+/// compile-fail doctests without rendering as examples.
+///
+/// A command is never `Clone`:
+///
+/// ```compile_fail
+/// use conpty_oxide::tokio::Command;
+///
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<Command>();
+/// ```
+///
+/// Low-level lifecycle and unvalidated process flags stay absent:
+///
+/// ```compile_fail
+/// let mut command = conpty_oxide::tokio::Command::new("cmd.exe");
+/// command.creation_flags(0);
+/// ```
+///
+/// ```compile_fail
+/// let mut command = conpty_oxide::tokio::Command::new("cmd.exe");
+/// command.kill_on_drop(false);
+/// ```
+///
+/// ```compile_fail
+/// let mut command = conpty_oxide::tokio::Command::new("cmd.exe");
+/// command.spawn_in(());
+/// ```
+///
+/// The child exposes no raw process handle:
+///
+/// ```compile_fail
+/// use std::os::windows::io::AsRawHandle;
+///
+/// fn requires_raw_handle<T: AsRawHandle>() {}
+/// requires_raw_handle::<conpty_oxide::tokio::Child>();
+/// ```
+#[cfg(doctest)]
+mod api_boundary {}
