@@ -179,7 +179,6 @@ impl Session {
 
     /// Waits for the child, then for end-of-file, and returns the rendered
     /// output with escape sequences removed plus the child's status.
-    #[must_use]
     pub fn finish(self) -> (String, ExitStatus) {
         let (bytes, status) = self.finish_raw();
         (strip_escapes(&String::from_utf8_lossy(&bytes)), status)
@@ -191,7 +190,6 @@ impl Session {
     /// # Panics
     ///
     /// If waiting for the child or collecting its output fails.
-    #[must_use]
     pub fn finish_raw(self) -> (Vec<u8>, ExitStatus) {
         let Self {
             mut child,

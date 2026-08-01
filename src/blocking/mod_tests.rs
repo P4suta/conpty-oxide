@@ -187,7 +187,8 @@ fn debug_shows_identity_not_internals() {
         let rendered = format!("{:?}", running.child);
         assert!(rendered.contains("pid"), "{rendered}");
         assert!(!rendered.contains("handle"), "{rendered}");
-        running.child.wait().expect("waiting must succeed");
+        let status = running.child.wait().expect("waiting must succeed");
+        assert!(status.success(), "exit 0 must report success: {status:?}");
         let rendered = format!("{:?}", running.child);
         assert!(
             rendered.contains("status"),
@@ -200,7 +201,8 @@ fn debug_shows_identity_not_internals() {
         assert!(rendered.contains("size"), "{rendered}");
         assert!(rendered.contains("supports_clear"), "{rendered}");
         assert!(!rendered.contains("backend_kind"), "{rendered}");
-        running.finish();
+        let (_output, status) = running.finish();
+        assert!(status.success(), "exit 0 must report success: {status:?}");
     });
 }
 
@@ -318,7 +320,8 @@ fn assert_resize_after_session_end_is_not_connected(pty: Pty) {
         writer,
         controller,
     } = Running::start_in(pty, Command::new("cmd.exe").args(["/c", "exit", "0"]));
-    child.wait().expect("waiting must succeed");
+    let status = child.wait().expect("waiting must succeed");
+    assert!(status.success(), "exit 0 must report success: {status:?}");
     // End-of-file proves the session is over (and, on a legacy backend,
     // that the watcher has already closed the pseudoconsole).
     reader.join().expect("the reader thread must not panic");
@@ -548,7 +551,8 @@ fn wait_is_repeatable_and_matches_try_wait() {
             Some(first)
         );
         assert_eq!(first.code(), 5);
-        running.finish();
+        let (_output, status) = running.finish();
+        assert_eq!(status, first, "teardown must report the cached status");
     });
 }
 

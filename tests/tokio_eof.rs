@@ -138,7 +138,8 @@ async fn waiting_for_a_short_child_resolves_promptly() {
                  which is over the {WAIT_BUDGET:?} budget"
             );
 
-            session.finish().await;
+            let (_output, status) = session.finish().await;
+            assert!(status.success(), "exit 0 must report success: {status:?}");
         },
     )
     .await;
