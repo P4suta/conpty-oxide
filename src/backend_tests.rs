@@ -515,7 +515,7 @@ fn a_rooted_driveless_directory_takes_the_working_directory_drive() {
 
 #[test]
 fn parse_version_reads_the_numeric_prefix() {
-    let cases: [(&str, Option<[u64; 4]>); 12] = [
+    let cases: [(&str, Option<[u64; 4]>); 14] = [
         ("1.24.1234.0", Some([1, 24, 1234, 0])),
         ("1.22.10352.0", Some([1, 22, 10352, 0])),
         // The format microsoft/terminal's ConPTY packages really use: the
@@ -531,6 +531,11 @@ fn parse_version_reads_the_numeric_prefix() {
         (concat!("\0", "1.24.1234.0\0"), Some([1, 24, 1234, 0])),
         // A trailing label does not invalidate the numbers before it.
         ("1.24.1234.0-preview", Some([1, 24, 1234, 0])),
+        // A labeled component contributes its leading digits and ends the
+        // version; the digits must not be discarded, or two different
+        // labeled builds would both truncate to their major.minor.
+        ("1.24.1234-hotfix", Some([1, 24, 1234, 0])),
+        ("1.24.1234-hotfix.7", Some([1, 24, 1234, 0])),
         // A fifth component is beyond what the resource format stores.
         ("1.2.3.4.5", Some([1, 2, 3, 4])),
         ("", None),
@@ -544,7 +549,7 @@ fn parse_version_reads_the_numeric_prefix() {
 
 #[test]
 fn version_pair_compatibility() {
-    let cases: [(Option<&str>, Option<&str>, bool); 10] = [
+    let cases: [(Option<&str>, Option<&str>, bool); 11] = [
         (Some("1.24.1234.0"), Some("1.24.1234.0"), true),
         (Some("1.24.260710001"), Some("1.24.260710001"), true),
         // Equal after padding: the same release, spelled two ways.
@@ -556,6 +561,9 @@ fn version_pair_compatibility() {
         // docs/conpty-pitfalls.md. A 16-bit component parse could not
         // tell them apart; this one must.
         (Some("1.24.260710001"), Some("1.24.260303001"), false),
+        // Labeled builds keep their digits, so two different labeled
+        // versions must not collapse into the same value.
+        (Some("1.24.1234-hotfix"), Some("1.24.20250101-x"), false),
         // An unreadable version is never assumed to match.
         (None, Some("1.24.1234.0"), false),
         (Some("1.24.1234.0"), None, false),

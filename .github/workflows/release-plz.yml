@@ -181,8 +181,9 @@ jobs:
             'any(.[]; .headSha == $sha and .conclusion == "success")' \
             <<< "$runs" >/dev/null
 
-      # Once the crates.io trusted publisher exists, no long-lived registry
-      # credential is present and release-plz exchanges this job's OIDC token.
+      # The crates.io trusted publisher is configured, so no long-lived
+      # registry credential exists and release-plz exchanges this job's OIDC
+      # token.
       - name: Publish with crates.io trusted publishing
         id: release-trusted
         if: >-
@@ -317,6 +318,13 @@ jobs:
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: stable
+
+      # Without this binary, release-plz downgrades `semver_check = true` to
+      # a warning and the configured check silently never runs.
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
+        with:
+          tool: cargo-semver-checks@0.49.0
 
       - name: Require the tested commit to still be current attached main
         id: freshness

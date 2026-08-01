@@ -85,9 +85,9 @@ jobs:
 
           # The by-tag release endpoint returns 404 for drafts, so select
           # the release from the listing by its recorded tag name.
-          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
-            jq -ce --arg tag "$RELEASE_TAG" '
-              [.[] | select(.tag_name == $tag)] |
+          release_json="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+            jq -ces --arg tag "$RELEASE_TAG" '
+              add | [.[] | select(.tag_name == $tag)] |
               if length == 1 then .[0]
               else error("expected exactly one release for the tag") end
             ')"
