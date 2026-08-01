@@ -9,7 +9,6 @@ use std::io::Read;
 use std::mem::ManuallyDrop;
 use std::os::windows::io::AsHandle;
 use std::process::{Child, Command, Stdio};
-#[cfg(feature = "tokio")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 #[cfg(feature = "tokio")]
@@ -348,9 +347,10 @@ fn callback_and_cleanup_failures_are_logged() {
     let events = crate::tracing_test_support::count_events(|| {
         log_callback_panic_safely("injected callback");
         log_unregister_failure(&io::Error::other("injected unregister failure"));
+        log_root_watcher_kill_failure(&io::Error::other("injected kill failure"));
         log_legacy_worker_failure(&io::Error::other("injected worker failure"));
     });
-    assert_eq!(events, 3);
+    assert_eq!(events, 4);
 }
 
 #[test]
@@ -372,6 +372,7 @@ fn legacy_wait_object_returns_the_published_registration() {
         spawn_close_worker: true,
         wait_object: Mutex::new(Some(expected)),
         wait_object_ready: Condvar::new(),
+        cleanup_observer: None,
     };
 
     assert_eq!(legacy_wait_object(&context), expected);
@@ -500,12 +501,14 @@ fn legacy_watcher_closes_in_callback_when_worker_spawn_fails() {
 
     let mut child = spawn_cmd(&["/C", "exit 0"]);
     let job = watcher_job();
+    let cleanup = Arc::new(AtomicBool::new(false));
     spawn_root_watcher_with_worker_spawn_failure(
         duplicated_handle(&child),
         Arc::downgrade(&job),
         Arc::clone(&shared),
         Duration::from_millis(10),
         true,
+        Arc::clone(&cleanup),
     )
     .expect("registering the forced-fallback watcher must succeed");
 
@@ -525,6 +528,16 @@ fn legacy_watcher_closes_in_callback_when_worker_spawn_fails() {
         .expect("the callback fallback must close conout without hanging")
         .expect("reading conout through the fallback close must succeed");
     assert!(shared.is_closed());
+    for _ in 0..100 {
+        if cleanup.load(Ordering::Acquire) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        cleanup.load(Ordering::Acquire),
+        "the callback fallback retained its context and duplicated process handle"
+    );
 
     reader.join().expect("the reader thread must not panic");
     child.wait().expect("reaping via std must succeed");

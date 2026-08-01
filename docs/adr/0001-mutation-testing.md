@@ -51,6 +51,10 @@ grow: each entry must carry a proof below and a matching narrow regex.
 - Replacing bitwise OR with XOR in the process creation flags is identical:
   `EXTENDED_STARTUPINFO_PRESENT` and `CREATE_UNICODE_ENVIRONMENT` have no
   common bit.
+- Replacing bitwise OR with XOR in the legacy root wait flags is identical:
+  `WT_EXECUTEONLYONCE` (`0x8`) and `WT_EXECUTELONGFUNCTION` (`0x10`) have no
+  common bit. The exclusion is restricted to the operator at column 32 in
+  `spawn_root_watcher_inner`.
 - Both named-pipe server access flags and the file-mode flags occupy
   disjoint bits. The byte/read/wait mode constants are zero, so OR and XOR
   also produce the same local-only mode value.

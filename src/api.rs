@@ -74,7 +74,6 @@ impl SessionOptions {
 /// The byte buffer may be large, so collecting output does not also make it
 /// implicitly cloneable; a hidden compile-fail doctest pins the missing
 /// `Clone`.
-#[must_use]
 pub struct SessionOutput {
     status: ExitStatus,
     bytes: Vec<u8>,
@@ -82,11 +81,13 @@ pub struct SessionOutput {
 
 impl SessionOutput {
     #[cfg(any(feature = "blocking", feature = "tokio"))]
+    #[must_use]
     pub(super) const fn new(status: ExitStatus, bytes: Vec<u8>) -> Self {
         Self { status, bytes }
     }
 
     /// Returns the root process's exit status.
+    #[must_use]
     pub const fn status(&self) -> ExitStatus {
         self.status
     }

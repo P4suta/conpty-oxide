@@ -25,12 +25,18 @@
 //! every fallible function reports failures as [`std::io::Error`] with
 //! [`std::io::ErrorKind::InvalidInput`].
 
+use std::cmp::Ordering;
 use std::collections::btree_map::{BTreeMap, Entry};
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::iter;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+
+use windows_sys::Win32::Foundation::TRUE;
+use windows_sys::Win32::Globalization::{
+    CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN,
+};
 
 const QUOTE: u16 = b'"' as u16;
 const BACKSLASH: u16 = b'\\' as u16;
@@ -55,6 +61,68 @@ enum EnvOp {
     /// Remove a variable (case-insensitively).
     Remove(OsString),
 }
+
+/// A Windows environment-variable key with the operating system's ordinal,
+/// case-insensitive equality and ordering.
+///
+/// Windows case folding is deliberately not reproduced in Rust: its mapping
+/// is OS-specific and may change between Windows versions. This mirrors the
+/// standard library's Windows `EnvKey` implementation.
+#[derive(Debug)]
+struct EnvKey {
+    wide: Vec<u16>,
+    len: i32,
+}
+
+impl EnvKey {
+    fn new(key: &OsStr) -> io::Result<Self> {
+        let wide: Vec<u16> = key.encode_wide().collect();
+        let len = match i32::try_from(wide.len()) {
+            Ok(len) => len,
+            Err(err) => return Err(io::Error::new(io::ErrorKind::InvalidInput, err)),
+        };
+        Ok(Self { wide, len })
+    }
+}
+
+impl Ord for EnvKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // SAFETY: both slices remain live for the call, their lengths were
+        // checked above, and CompareStringOrdinal only reads those slices.
+        match unsafe {
+            CompareStringOrdinal(
+                self.wide.as_ptr(),
+                self.len,
+                other.wide.as_ptr(),
+                other.len,
+                TRUE,
+            )
+        } {
+            CSTR_LESS_THAN => Ordering::Less,
+            CSTR_EQUAL => Ordering::Equal,
+            CSTR_GREATER_THAN => Ordering::Greater,
+            // CompareStringOrdinal cannot fail with the valid pointers and
+            // checked lengths above. Retain a deterministic, non-panicking
+            // order if an unsupported Windows implementation violates that
+            // contract.
+            _ => self.wide.cmp(&other.wide),
+        }
+    }
+}
+
+impl PartialOrd for EnvKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for EnvKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for EnvKey {}
 
 /// A builder describing how to launch a child process under a pseudoconsole.
 ///
@@ -246,10 +314,9 @@ impl Command {
     /// modifications are replayed over it case-insensitively, and the result
     /// is flattened into a `KEY=VALUE\0...\0\0` UTF-16 block.
     ///
-    /// Entries are sorted case-insensitively by comparing the uppercased
-    /// UTF-16 units of their names, as required by the `CreateProcessW`
-    /// documentation and equivalent to the standard library's ordinal
-    /// ignore-case `EnvKey` ordering.
+    /// Entries are sorted with Windows' ordinal ignore-case comparison, as
+    /// required by the `CreateProcessW` documentation and equivalent to the
+    /// standard library's Windows `EnvKey` ordering.
     ///
     /// Errors with [`io::ErrorKind::InvalidInput`] if a recorded name is
     /// empty, contains `=`, or if a name or value contains NUL.
@@ -258,13 +325,12 @@ impl Command {
             return Ok(None);
         }
 
-        // Map from uppercased UTF-16 name to (original name, value); the
-        // BTreeMap ordering directly yields the sort order required by
-        // `CreateProcessW`.
-        let mut map: BTreeMap<Vec<u16>, (OsString, OsString)> = BTreeMap::new();
+        // The BTreeMap ordering directly yields the sort order required by
+        // `CreateProcessW` while values retain the caller's original casing.
+        let mut map: BTreeMap<EnvKey, (OsString, OsString)> = BTreeMap::new();
         if !self.env_clear {
             for (key, value) in std::env::vars_os() {
-                map.insert(upcased_wide(&key), (key, value));
+                map.insert(EnvKey::new(&key)?, (key, value));
             }
         }
         for op in &self.env_ops {
@@ -272,7 +338,7 @@ impl Command {
                 EnvOp::Set(key, value) => {
                     validate_env_key(key)?;
                     ensure_no_nuls(value)?;
-                    match map.entry(upcased_wide(key)) {
+                    match map.entry(EnvKey::new(key)?) {
                         // Overwriting keeps the casing of the existing name,
                         // matching `BTreeMap::insert` semantics in std's
                         // `CommandEnv`.
@@ -284,7 +350,7 @@ impl Command {
                 },
                 EnvOp::Remove(key) => {
                     validate_env_key(key)?;
-                    map.remove(&upcased_wide(key));
+                    map.remove(&EnvKey::new(key)?);
                 },
             }
         }
@@ -376,25 +442,6 @@ fn append_regular_arg(cmd: &mut Vec<u16>, arg: &OsStr) -> io::Result<()> {
         cmd.push(QUOTE);
     }
     Ok(())
-}
-
-/// Uppercases one UTF-16 code unit for ordinal ignore-case comparison,
-/// approximating `RtlUpcaseUnicodeChar`: single-unit uppercase mappings are
-/// applied, everything else (surrogate halves, multi-char or non-BMP
-/// mappings) is left unchanged. Exact for ASCII, which covers virtually all
-/// real environment variable names.
-fn upcase_unit(unit: u16) -> u16 {
-    char::from_u32(u32::from(unit)).map_or(unit, |c| {
-        let mut upper = c.to_uppercase();
-        match (upper.next(), upper.next()) {
-            (Some(up), None) => u16::try_from(u32::from(up)).unwrap_or(unit),
-            _ => unit,
-        }
-    })
-}
-
-fn upcased_wide(s: &OsStr) -> Vec<u16> {
-    s.encode_wide().map(upcase_unit).collect()
 }
 
 #[cfg(test)]

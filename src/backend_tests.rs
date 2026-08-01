@@ -438,8 +438,17 @@ fn from_dir_unchecked_skips_only_the_version_check() {
         .expect_err("placeholder files carry no version resource");
     assert_eq!(err.kind(), crate::BackendErrorKind::VersionMismatch);
 
+    // A malformed image must become an ordinary loader error without a modal
+    // Bad Image dialog, and the caller's thread error mode must be restored.
+    // SAFETY: GetThreadErrorMode has no preconditions.
+    let error_mode_before =
+        unsafe { windows_sys::Win32::System::Diagnostics::Debug::GetThreadErrorMode() };
     let err = ConPtyBackend::from_dir_unchecked(temp.path())
         .expect_err("an empty file is not a loadable DLL");
+    // SAFETY: GetThreadErrorMode has no preconditions.
+    let error_mode_after =
+        unsafe { windows_sys::Win32::System::Diagnostics::Debug::GetThreadErrorMode() };
+    assert_eq!(error_mode_after, error_mode_before);
     assert_eq!(err.kind(), crate::BackendErrorKind::DllNotFound);
     // Not `NotFound`: the file exists, the loader rejected it.
     assert_ne!(
@@ -515,7 +524,7 @@ fn a_rooted_driveless_directory_takes_the_working_directory_drive() {
 
 #[test]
 fn parse_version_reads_the_numeric_prefix() {
-    let cases: [(&str, Option<[u64; 4]>); 14] = [
+    let cases: [(&str, Option<[u64; 4]>); 15] = [
         ("1.24.1234.0", Some([1, 24, 1234, 0])),
         ("1.22.10352.0", Some([1, 22, 10352, 0])),
         // The format microsoft/terminal's ConPTY packages really use: the
@@ -536,6 +545,8 @@ fn parse_version_reads_the_numeric_prefix() {
         // labeled builds would both truncate to their major.minor.
         ("1.24.1234-hotfix", Some([1, 24, 1234, 0])),
         ("1.24.1234-hotfix.7", Some([1, 24, 1234, 0])),
+        // A labeled first component must still count as a parsed version.
+        ("1234-hotfix", Some([1234, 0, 0, 0])),
         // A fifth component is beyond what the resource format stores.
         ("1.2.3.4.5", Some([1, 2, 3, 4])),
         ("", None),

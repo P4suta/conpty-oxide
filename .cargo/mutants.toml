@@ -23,6 +23,7 @@ exclude_re = [
   'src/tokio/session\.rs:.*replace <impl AsyncWrite for Session>::poll_flush .* with Poll::from\(Ok\(\(\)\)\)',
   'src/backend/exports\.rs:.*replace \| with \^ in restricted_search_flags',
   'src/core/proc\.rs:.*replace \| with \^ in spawn',
+  'src/core/wait\.rs:\d+:32: replace \| with \^ in spawn_root_watcher_inner',
   'src/core/pipes/overlapped\.rs:.*replace \| with \^ in ServerDirection::server_open_mode',
   'src/core/pipes/overlapped\.rs:.*replace \| with \^ in pipe_mode',
   'src/core/pipes/overlapped\.rs:\d+:20: replace \| with & in pipe_mode',
