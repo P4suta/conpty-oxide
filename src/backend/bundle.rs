@@ -210,6 +210,10 @@ pub(super) fn versions_are_compatible(dll: Option<&str>, host: Option<&str>) -> 
 }
 
 /// Parses the numeric prefix of a `ProductVersion` into four components.
+///
+/// A field carrying a non-numeric label contributes its leading digits and
+/// then ends the version, so `1.24.1234-hotfix` and `1.24.9999-beta` stay
+/// distinguishable instead of both truncating to `1.24`.
 pub(super) fn parse_version(text: &str) -> Option<[u64; 4]> {
     let text = text.trim_matches(|c: char| c == '\0' || c.is_whitespace());
     let mut parts = [0; 4];
@@ -218,11 +222,18 @@ pub(super) fn parse_version(text: &str) -> Option<[u64; 4]> {
         if seen == parts.len() {
             break;
         }
-        let Ok(value) = field.trim().parse::<u64>() else {
+        let field = field.trim();
+        if let Ok(value) = field.parse::<u64>() {
+            parts[seen] = value;
+            seen += 1;
+        } else {
+            let digits = &field[..field.bytes().take_while(u8::is_ascii_digit).count()];
+            if let Ok(value) = digits.parse::<u64>() {
+                parts[seen] = value;
+                seen += 1;
+            }
             break;
-        };
-        parts[seen] = value;
-        seen += 1;
+        }
     }
     (seen > 0).then_some(parts)
 }

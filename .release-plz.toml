@@ -3,7 +3,11 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 [workspace]
-changelog_update = true
+# The changelog is hand-curated. release-plz's generator does not recognize
+# this file's custom header and would prepend a second one, so the release
+# pull request only bumps the version; moving the Unreleased notes into the
+# new release section stays a review-time edit.
+changelog_update = false
 dependencies_update = false
 release_always = false
 git_release_draft = true

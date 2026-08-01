@@ -749,9 +749,89 @@ fn assert_sbom_predicates_equal(results: &[Value], expected: &Value, context: &s
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
     use serde_json::json;
 
-    use super::{assert_sbom_predicates_equal, release_version, single_sha256};
+    use super::{assert_sbom_predicates_equal, release_version, single_sha256, verify_vcs_info};
+
+    const TAG_COMMIT: &str = "3c0ccb1facd83ae29f6e4c67a56fc51cef39e74d";
+
+    fn append_bytes<W: std::io::Write>(builder: &mut tar::Builder<W>, path: &str, bytes: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, path, bytes)
+            .expect("append archive entry");
+    }
+
+    /// Builds a minimal `.crate` archive, optionally with a vcs-info entry.
+    fn crate_archive(label: &str, vcs_json: Option<&str>) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "conpty-oxide-xtask-vcs-{}-{label}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).expect("create scratch directory");
+        let crate_path = directory.join("conpty-oxide-9.9.9.crate");
+        let file = fs::File::create(&crate_path).expect("create archive file");
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        append_bytes(
+            &mut builder,
+            "conpty-oxide-9.9.9/Cargo.toml",
+            b"[package]\n",
+        );
+        if let Some(json) = vcs_json {
+            append_bytes(
+                &mut builder,
+                "conpty-oxide-9.9.9/.cargo_vcs_info.json",
+                json.as_bytes(),
+            );
+        }
+        builder
+            .into_inner()
+            .expect("finish tar stream")
+            .finish()
+            .expect("finish gzip stream");
+        crate_path
+    }
+
+    #[test]
+    fn vcs_info_matching_the_tag_commit_passes() {
+        let json = format!("{{\"git\":{{\"sha1\":\"{TAG_COMMIT}\"}},\"path_in_vcs\":\"\"}}");
+        let archive = crate_archive("match", Some(&json));
+        verify_vcs_info(&archive, "9.9.9", TAG_COMMIT).expect("matching commit must pass");
+
+        // Hex case differences are not a mismatch.
+        let upper_commit = TAG_COMMIT.to_uppercase();
+        let upper = format!("{{\"git\":{{\"sha1\":\"{upper_commit}\"}}}}");
+        let archive = crate_archive("match-upper", Some(&upper));
+        verify_vcs_info(&archive, "9.9.9", TAG_COMMIT).expect("uppercase hex must pass");
+    }
+
+    #[test]
+    fn vcs_info_with_a_different_commit_is_rejected() {
+        let other = "0000000000000000000000000000000000000000";
+        let json = format!("{{\"git\":{{\"sha1\":\"{other}\"}}}}");
+        let archive = crate_archive("mismatch", Some(&json));
+        assert!(verify_vcs_info(&archive, "9.9.9", TAG_COMMIT).is_err());
+    }
+
+    #[test]
+    fn a_dirty_crate_is_rejected() {
+        let json = format!("{{\"git\":{{\"sha1\":\"{TAG_COMMIT}\",\"dirty\":true}}}}");
+        let archive = crate_archive("dirty", Some(&json));
+        assert!(verify_vcs_info(&archive, "9.9.9", TAG_COMMIT).is_err());
+    }
+
+    #[test]
+    fn a_crate_without_vcs_info_is_rejected() {
+        let archive = crate_archive("missing", None);
+        assert!(verify_vcs_info(&archive, "9.9.9", TAG_COMMIT).is_err());
+    }
 
     #[test]
     fn v_prefixed_semantic_versions_are_accepted() {

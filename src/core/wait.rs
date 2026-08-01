@@ -226,7 +226,10 @@ impl RegisteredWait {
                 Some(registered_wait_callback),
                 context.cast(),
                 INFINITE,
-                WT_EXECUTEONLYONCE,
+                // The callback wakes a caller-supplied Waker, which a legal
+                // executor may use to poll an entire task inline, so the
+                // wait must not run on a shared short-callback thread.
+                WT_EXECUTEONLYONCE | WT_EXECUTELONGFUNCTION,
             )
         };
         if registered == 0 {
@@ -570,6 +573,7 @@ fn spawn_root_watcher_inner(
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     *slot = Some(wait_object);
+    drop(slot);
     context_ref.wait_object_ready.notify_all();
 
     Ok(())

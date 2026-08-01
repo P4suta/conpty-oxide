@@ -249,7 +249,12 @@ async fn managed_output_future_stays_below_clippys_stack_threshold() {
         "Session::collect_output() is {bytes} bytes; keep it below Clippy's \
          {LARGE_FUTURE_THRESHOLD}-byte large-future threshold without boxing"
     );
-    future.await.expect("managed collection must complete");
+    let output = future.await.expect("managed collection must complete");
+    assert!(
+        output.status().success(),
+        "exit 0 must report success: {:?}",
+        output.status()
+    );
 }
 
 /// `Debug` output ends up in logs and bug reports, so it must show a
@@ -275,13 +280,15 @@ async fn debug_shows_identity_not_internals() {
     let rendered = format!("{:?}", running.child);
     assert!(rendered.contains("pid"), "{rendered}");
     assert!(!rendered.contains("handle"), "{rendered}");
-    running.child.wait().await.expect("waiting must succeed");
+    let status = running.child.wait().await.expect("waiting must succeed");
+    assert!(status.success(), "exit 0 must report success: {status:?}");
     let rendered = format!("{:?}", running.child);
     assert!(
         rendered.contains("status"),
         "a reaped child must show its cached status: {rendered}"
     );
-    running.finish().await;
+    let (_output, status) = running.finish().await;
+    assert!(status.success(), "exit 0 must report success: {status:?}");
 
     let controller = pty.controller();
     let (reader, writer) = pty.into_split();
@@ -409,7 +416,8 @@ async fn assert_resize_after_session_end_is_not_connected(pty: Pty) {
         writer,
         controller,
     } = Running::start_in(pty, Command::new("cmd.exe").args(["/c", "exit", "0"]));
-    child.wait().await.expect("waiting must succeed");
+    let status = child.wait().await.expect("waiting must succeed");
+    assert!(status.success(), "exit 0 must report success: {status:?}");
     // End-of-file proves the session is over (and, on a legacy backend,
     // that the watcher has already closed the pseudoconsole).
     reader.await.expect("the reader task must not panic");
@@ -632,7 +640,8 @@ async fn wait_is_repeatable_and_matches_try_wait() {
     );
     assert_eq!(running.child.cached_status(), Some(first));
     assert_eq!(first.code(), 5);
-    complete_within("wait_is_repeatable_teardown", running.finish()).await;
+    let (_output, status) = complete_within("wait_is_repeatable_teardown", running.finish()).await;
+    assert_eq!(status, first, "teardown must report the cached status");
 }
 
 /// A dropped `wait` future must lose nothing: the next `wait` has to
@@ -655,7 +664,12 @@ async fn a_cancelled_wait_can_be_retried() {
         .await
         .expect("a retried wait must succeed");
     assert_eq!(status.code(), KILL_EXIT_CODE);
-    complete_within("a_cancelled_wait_teardown", running.finish()).await;
+    let (_output, teardown_status) =
+        complete_within("a_cancelled_wait_teardown", running.finish()).await;
+    assert_eq!(
+        teardown_status, status,
+        "teardown must report the kill status"
+    );
 }
 
 #[tokio::test]
