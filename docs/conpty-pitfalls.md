@@ -120,10 +120,11 @@ checks misfire (microsoft/terminal#19112).
 
 **In this crate.** `src/core/session.rs` performs exactly three steps per
 spawn, in this order: create the job object and the process, call
-`ReleasePseudoConsole`, and — only if that did not happen — start the legacy
-watcher. Releasing before a client exists would release a console nobody is
-attached to; skipping the watcher on a legacy backend would leave a reader
-waiting for an end-of-file that can never arrive. `ConPtyBackend` resolves
+`ReleasePseudoConsole`, and register the root watcher — armed for every
+backend; on a legacy backend it additionally requests close after the drain
+grace. Releasing before a client exists would release a console nobody is
+attached to; skipping the watcher's close on a legacy backend would leave a
+reader waiting for an end-of-file that can never arrive. `ConPtyBackend` resolves
 every entry point with `GetProcAddress` and reports
 the backend's internal release capability check; a failed release is logged
 (with the `tracing` feature) and demotes that session to the legacy path
@@ -159,9 +160,10 @@ end-of-file tests pass for the wrong reason.
 (`OwnedWriteHalf`) whose documentation states that dropping it *ends* the
 session rather than signalling one, and the same is true of
 `AsyncWriteExt::shutdown` on the async front end. Nothing inside the crate
-closes conin early: the shutdown paths retire conout first. Both examples in
-`examples/` hold the write half until the child has exited — the async one
-parks a task on it rather than letting it drop when stdin ends.
+closes conin early: the shutdown paths retire conout first. The blocking
+example delegates the whole lifecycle to the managed session, which holds the
+write half internally; the async example holds it explicitly, parking a task
+on it rather than letting it drop when stdin ends.
 
 **Sources.**
 
@@ -207,7 +209,7 @@ exactly the mismatched pairs the check exists to reject.
 16-bit parse accepted the cross-release pair; the 64-bit one refuses it with
 `BackendErrorKind::VersionMismatch`, which is why the loader parses `u64`. The
 tests `parse_version_reads_the_numeric_prefix` and
-`version_pair_compatibility` in `src/backend.rs` keep both halves true: the
+`version_pair_compatibility` in `src/backend_tests.rs` keep both halves true: the
 former pins the nine-digit component parse, the latter pins the refusal of
 exactly this pair.
 
@@ -265,8 +267,8 @@ DLL's search exactly: adjacent first, then the native-architecture
 subdirectory resolved through a dynamically loaded `IsWow64Process2`. The inbox
 `conhost.exe` is deliberately not accepted as a validation target — falling
 back to it hands the caller a backend with the behaviour they were trying to
-replace. `just fetch-conpty` lays both files out side by side, which is
-the layout with no ambiguity at all.
+replace. The repository's `just fetch-conpty` tooling lays both files out
+side by side, which is the layout with no ambiguity at all.
 
 **Sources.**
 
@@ -289,10 +291,11 @@ reply therefore deadlocks the input direction by construction — and this is a
 creation-time flag, so the deadlock is armed before the caller has done
 anything else.
 
-**In this crate.** The flag is off by default in both front ends.
-`PtyBuilder::inherit_cursor` exists, and its documentation states the two
-conditions under which it is usable (output already drained by another
-thread or task, and the reply echoed back) along with the outstanding hang
+**In this crate.** The flag is off unconditionally: cursor inheritance is
+deliberately outside the 0.1 public API, and the internal builder hook that
+sets it exists only for the crate's own tests. Exposing it later requires an
+answer for both usability conditions (output already drained by another
+thread or task, and the reply echoed back) and for the outstanding hang
 report.
 
 **Sources.**

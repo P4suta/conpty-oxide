@@ -60,7 +60,7 @@ fn main() -> conpty_oxide::Result<()> {
 For interactive use, split the session into independently owned input,
 output, child, and control handles:
 
-```no_run
+```rust,no_run
 use conpty_oxide::blocking::Command;
 
 fn main() -> conpty_oxide::Result<()> {
@@ -89,7 +89,7 @@ features = ["io-util", "macros", "rt-multi-thread"]
 
 The asynchronous API mirrors the blocking one:
 
-```no_run
+```rust,no_run
 use conpty_oxide::tokio::Command;
 
 #[tokio::main]
@@ -146,6 +146,9 @@ Windows-specific session layer that such tools can build on.
 - [ConPTY lifecycle notes](https://github.com/P4suta/conpty-oxide/blob/main/docs/conpty-pitfalls.md)
 - [Changelog](https://github.com/P4suta/conpty-oxide/blob/main/CHANGELOG.md)
 - [Contributing](https://github.com/P4suta/conpty-oxide/blob/main/CONTRIBUTING.md)
-- [Security policy](https://github.com/P4suta/conpty-oxide/security/policy)
+- [Security policy](https://github.com/P4suta/conpty-oxide/blob/main/SECURITY.md)
+- [Code of conduct](https://github.com/P4suta/conpty-oxide/blob/main/CODE_OF_CONDUCT.md)
+
+## License
 
 Licensed under either Apache-2.0 or MIT, at your option.

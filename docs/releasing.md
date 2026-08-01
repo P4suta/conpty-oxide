@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 ## Public API baseline
 
-The four files under `public-api/` are the reviewed API baseline. Every
+The four snapshot files under `public-api/` are the reviewed API baseline. Every
 change requires reviewing all four feature shapes and then running
 `just public-api-update`. Cargo's pre-1.0 compatibility rules still apply,
 but they are not sufficient on their own: a `0.2` API snapshot change also
@@ -121,7 +121,9 @@ Before merging a release-plz pull request:
 2. Run `just release-check` from a clean worktree.
 3. Confirm the public API snapshots, package contents, external blocking/Tokio
    consumers, coverage threshold, and dry-run publish all pass.
-4. Merge only after the required Ruleset checks pass on the current head.
+4. Confirm the latest scheduled mutation audit is green, or dispatch one for
+   a release that changed lifecycle or Win32 boundary code.
+5. Merge only after the required Ruleset checks pass on the current head.
 
 Keep `RELEASE_ENABLED=false` through the merge. When that exact merge commit's
 CI run succeeds, enable the gate, manually dispatch `Release-plz` from `main`,

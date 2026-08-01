@@ -12,6 +12,20 @@ with Cargo's additional pre-1.0 compatibility rules.
 
 ## [Unreleased]
 
+### Changed
+
+- `ExitStatus` and `SessionOutput` are `#[must_use]` types: discarding a
+  collected status or output now warns, as with `std::process::ExitStatus`.
+
+### Fixed
+
+- Bundle version validation keeps the leading digits of a labeled version
+  component, so two different labeled builds no longer compare as a
+  matching pair.
+- The API-boundary assertions no longer render on docs.rs as the crate's
+  first — deliberately failing — examples. Every boundary is stated in
+  prose and pinned by hidden compile-fail doctests.
+
 ## [0.1.0] - 2026-08-01
 
 ### Added
@@ -35,11 +49,9 @@ with Cargo's additional pre-1.0 compatibility rules.
 - Public API snapshots, MSRV and architecture gates, external-DLL tests, and
   line, region, and function coverage thresholds.
 
-### Known scope
-
-- Version 0.1 is Windows-only and requires Windows 10 version 1809 or later.
-- Detached sessions, manual EOF policy, cursor inheritance, pre-staged spawn,
-  and a cross-platform facade are intentionally outside the 0.1 API.
+Version 0.1 is Windows-only and requires Windows 10 version 1809 or later.
+Detached sessions, manual EOF policy, cursor inheritance, pre-staged spawn,
+and a cross-platform facade are intentionally outside the 0.1 API.
 
 [Unreleased]: https://github.com/P4suta/conpty-oxide/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/P4suta/conpty-oxide/releases/tag/v0.1.0

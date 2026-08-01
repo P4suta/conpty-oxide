@@ -38,6 +38,13 @@
     doc = ""
 )]
 #![cfg_attr(
+    not(feature = "blocking"),
+    doc = "The `blocking` feature — not enabled in this build of the documentation —",
+    doc = "adds the synchronous `conpty_oxide::blocking` frontend with the three",
+    doc = "managed completion paths: `wait`, `collect_output`, and `into_parts`.",
+    doc = ""
+)]
+#![cfg_attr(
     feature = "tokio",
     doc = "The [`tokio`] module mirrors all three paths with `AsyncRead`/`AsyncWrite`",
     doc = "streams and registered process waits. Frontend types never change meaning",
@@ -50,6 +57,15 @@
     doc = "adds a symmetric `conpty_oxide::tokio` frontend.",
     doc = ""
 )]
+//! # Feature flags
+//!
+//! - `blocking` (default) — the synchronous frontend.
+//! - `tokio` — the asynchronous frontend on Tokio.
+//! - `tracing` — diagnostics through the `tracing` crate; never changes the
+//!   public API or any behavior.
+//!
+//! The features can be combined.
+//!
 //! # Managed sessions
 //!
 //! A managed session is bounded by its root process. Once the root's real exit

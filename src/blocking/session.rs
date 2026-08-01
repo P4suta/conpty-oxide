@@ -156,6 +156,22 @@ impl Session {
     /// writes. Use [`Session::wait`] when output is unnecessary, or
     /// [`Session::into_parts`] to process it as a stream.
     ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use conpty_oxide::blocking::Command;
+    ///
+    /// # fn main() -> conpty_oxide::Result<()> {
+    /// let output = Command::new("cmd.exe")
+    ///     .args(["/d", "/c", "echo", "hello"])
+    ///     .spawn()?
+    ///     .collect_output()?;
+    /// assert!(output.status().success());
+    /// print!("{}", String::from_utf8_lossy(output.as_bytes()));
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns an error if the reader thread cannot be created, output cannot

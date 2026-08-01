@@ -45,7 +45,9 @@ body:
     attributes:
       label: Checks
       options:
-        - label: I searched existing issues and the documented 0.1 exclusions.
+        - label: >-
+            I searched existing issues and the
+            [non-goals](https://github.com/P4suta/conpty-oxide/blob/main/README.md#non-goals).
           required: true
         - label: This request is specific to Windows ConPTY behavior.
           required: true

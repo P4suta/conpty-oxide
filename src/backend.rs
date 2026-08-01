@@ -275,8 +275,8 @@ impl ConPtyBackend {
     /// not count, because the DLL never searches there and would silently run
     /// every session against the operating system's inbox `conhost.exe`
     /// instead of the file this constructor validated. Placing
-    /// `OpenConsole.exe` next to the DLL, as `scripts/fetch-conpty.ps1` does,
-    /// is the recommended layout.
+    /// `OpenConsole.exe` next to the DLL, as the repository's
+    /// `just fetch-conpty` tooling does, is the recommended layout.
     ///
     /// A relative `dir` is resolved against the current working directory once,
     /// here. The DLL is then loaded by absolute path with a search policy that
@@ -285,6 +285,18 @@ impl ConPtyBackend {
     /// A *drive-relative* `dir` (`C:dir`) is rejected as
     /// [`crate::BackendErrorKind::DllNotFound`]: it names a path relative to that drive's
     /// own current directory, which cannot be resolved once and pinned.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use conpty_oxide::ConPtyBackend;
+    ///
+    /// # fn main() -> Result<(), conpty_oxide::BackendError> {
+    /// let backend = ConPtyBackend::from_dir("vendor/conpty")?;
+    /// println!("validated bundle: {backend:?}");
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// # Errors
     ///
