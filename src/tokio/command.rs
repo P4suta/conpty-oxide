@@ -145,7 +145,9 @@ impl Command {
     ///
     /// # Errors
     ///
-    /// Returns an error when the backend or pipes cannot be initialized, or
+    /// Returns an error when the backend or pipes cannot be initialized —
+    /// including when no Tokio runtime with an enabled I/O driver is
+    /// current, which surfaces as [`crate::ErrorKind::CreateConsole`] — or
     /// when the root process cannot be spawned.
     pub fn spawn(&mut self) -> Result<Session> {
         self.spawn_with(SessionOptions::default())
@@ -156,7 +158,10 @@ impl Command {
     /// # Errors
     ///
     /// Returns an error when the selected backend or pipes cannot be
-    /// initialized, or when the root process cannot be spawned.
+    /// initialized — including when no Tokio runtime with an enabled I/O
+    /// driver is current, which surfaces as
+    /// [`crate::ErrorKind::CreateConsole`] — or when the root process cannot
+    /// be spawned.
     pub fn spawn_with(&mut self, options: SessionOptions) -> Result<Session> {
         let (size, backend) = options.into_parts();
         let mut builder = Pty::builder().size(size);

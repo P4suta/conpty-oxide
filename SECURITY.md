@@ -21,14 +21,17 @@ stable distribution channel.
 Do not disclose a suspected vulnerability in an issue, discussion, pull
 request, test log, or other public channel. Use GitHub's
 [private vulnerability report](https://github.com/P4suta/conpty-oxide/security/advisories/new).
-If private vulnerability reporting is not available, wait for the repository
-owner to enable it rather than publishing the report.
+If private vulnerability reporting is unavailable, contact the repository
+owner through the contact channel on their
+[GitHub profile](https://github.com/P4suta) rather than publishing the
+report.
 
 Include affected versions, Windows builds and architectures, enabled features,
 impact, reproduction steps or a proof of concept, and any proposed mitigation.
 Remove credentials, private paths, and unrelated personal data.
 
-The maintainers will acknowledge a complete report, investigate it privately,
-coordinate a fix and advisory when confirmed, and credit reporters who want
-credit. Please allow time for supported Windows versions and both system and
-standalone ConPTY backends to be tested before public disclosure.
+The maintainers will acknowledge a complete report within seven days,
+investigate it privately, coordinate a fix and advisory when confirmed, and
+credit reporters who want credit. Coordinated disclosure defaults to 90 days
+from acknowledgment, extended by agreement when a fix must be tested across
+supported Windows versions and both system and standalone ConPTY backends.

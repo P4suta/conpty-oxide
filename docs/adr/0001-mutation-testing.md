@@ -4,31 +4,39 @@ SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4sut
 SPDX-License-Identifier: MIT OR Apache-2.0
 -->
 
-# ADR 0001: Mutation testing is a release audit with proven exclusions
+# ADR 0001: Mutation testing is a scheduled audit with proven exclusions
 
 ## Status
 
 Accepted, 2026-08-01.
 
+## Context
+
+A full mutation run over this suite takes hours across four shards, which
+disqualifies it as a pull-request gate. Blanket exclusions would hide real
+test gaps, so every exclusion needs an individual equivalence argument.
+
 ## Decision
 
-Mutation testing runs as a pre-release audit, not as a pull-request gate.
-Run it with the vendored standalone backend available:
-
-```powershell
-$env:CONPTY_OXIDE_TEST_DLL_DIR = Join-Path $PWD 'vendor/conpty'
-cargo mutants --shard 0/4 --timeout 90 --build-timeout 180 --no-shuffle -vV
-```
-
-Use shards `0/4` through `3/4` in parallel. The 90-second timeout leaves room
-for nextest to cancel concurrent process tests after an intended kill-tree
-failure; shorter budgets misclassify caught mutants as timeouts.
+Mutation testing runs as a scheduled audit — the weekly `mutation.yml`
+workflow, also dispatchable on demand — and its latest result is reviewed
+before a release. Run one shard locally with `just mutants-ci <shard>` (for
+example `just mutants-ci 0/4`), with the vendored standalone backend
+available via `CONPTY_OXIDE_TEST_DLL_DIR`. The recipe's 90-second timeout
+leaves room for nextest to cancel concurrent process tests after an intended
+kill-tree failure; shorter budgets misclassify caught mutants as timeouts.
 
 A mutant that changes behaviour must be caught by a focused test. An
 exclusion is recorded in `.cargo/mutants.toml` only when the mutated
 expression is provably identical for every input, and each regex stays tied
 to one file, function, operator, and replacement. Files or classes of
 mutations are never excluded.
+
+## Consequences
+
+Pull requests stay fast while every mutation-visible behaviour change is
+still audited on a weekly cadence, and the exclusion list cannot silently
+grow: each entry must carry a proof below and a matching narrow regex.
 
 ## Recorded equivalences
 

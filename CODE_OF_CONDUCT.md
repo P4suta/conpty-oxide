@@ -30,10 +30,12 @@ conflict of interest.
 
 Do not report conduct incidents in a public issue. Send a private report using
 GitHub's [private report form](https://github.com/P4suta/conpty-oxide/security/advisories/new)
-and prefix the title with `[Conduct]`. Include links or dates, the behavior you
-observed, its impact, and any immediate safety concern. This private channel is
-shared with repository maintainers; reports are handled confidentially to the
-extent the investigation permits.
+and prefix the title with `[Conduct]`; the form's vulnerability-specific
+fields (severity, ecosystem, CVE) can be left at their defaults. Include links
+or dates, the behavior you observed, its impact, and any immediate safety
+concern. This private channel is shared with repository maintainers; reports
+are acknowledged within seven days and handled confidentially to the extent
+the investigation permits.
 
 If the report concerns repository maintainers or requires action by GitHub,
 use GitHub's private **Report abuse** flow from the relevant content or user

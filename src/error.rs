@@ -97,6 +97,19 @@ enum ErrorRepr {
 
 impl Error {
     /// Returns the stable classification of this failure.
+    ///
+    #[cfg_attr(
+        feature = "blocking",
+        doc = "# Examples",
+        doc = "",
+        doc = "```no_run",
+        doc = "use conpty_oxide::blocking::Command;",
+        doc = "",
+        doc = "if let Err(error) = Command::new(\"does-not-exist.exe\").spawn() {",
+        doc = "    eprintln!(\"{:?}: {error}\", error.kind());",
+        doc = "}",
+        doc = "```"
+    )]
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self.repr {

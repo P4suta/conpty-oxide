@@ -110,11 +110,13 @@ impl Session {
     /// is saved, remaining descendants are terminated and the teardown tail is
     /// drained to EOF without allocating an output-sized buffer.
     ///
-    /// The future owns the session. Cancelling it drops the managed child and
-    /// terminates the process tree.
-    ///
     /// Terminal input remains open until the root exits. Input shutdown is
     /// session teardown, not an ordinary stdin EOF signal.
+    ///
+    /// # Cancel safety
+    ///
+    /// The future owns the session. Cancelling it drops the managed child and
+    /// terminates the process tree.
     ///
     /// # Errors
     ///
@@ -138,13 +140,16 @@ impl Session {
     /// EOF. This gives released and legacy `ConPTY` backends the same finite,
     /// root-bounded completion rule.
     ///
-    /// Bytes already read from this `Session` are not included. The future
-    /// owns the whole session; cancelling it drops the managed child first and
-    /// terminates the process tree.
+    /// Bytes already read from this `Session` are not included.
     ///
     /// Collection is unbounded and may allocate as much memory as the child
     /// writes. Use [`Session::wait`] when output is unnecessary, or
     /// [`Session::into_parts`] to process it as a stream.
+    ///
+    /// # Cancel safety
+    ///
+    /// The future owns the whole session. Cancelling it drops the managed
+    /// child first and terminates the process tree.
     ///
     /// # Errors
     ///

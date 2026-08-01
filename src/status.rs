@@ -14,10 +14,11 @@ use core::fmt;
 
 /// The exit status of a child process that has terminated.
 ///
-/// Obtained from either front end's `Child::wait` or `Child::try_wait`. The
-/// wrapped value is exactly what `GetExitCodeProcess` reported, read only
-/// after the process handle was confirmed signaled — so it can never be the
-/// `STILL_ACTIVE` sentinel of a still-running process.
+/// Obtained from either front end's `Session::wait`, `Session::try_wait`,
+/// `SessionOutput::status`, or the lower-level `Child::wait` and
+/// `Child::try_wait`. The wrapped value is exactly what `GetExitCodeProcess`
+/// reported, read only after the process handle was confirmed signaled — so
+/// it can never be the `STILL_ACTIVE` sentinel of a still-running process.
 ///
 /// # Examples
 ///

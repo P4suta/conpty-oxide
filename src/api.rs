@@ -20,6 +20,18 @@ use crate::status::ExitStatus;
 /// Managed sessions deliberately expose only the initial terminal size and
 /// backend choice. Cursor inheritance, manual EOF policy, and detached
 /// spawning are outside the 0.1 API.
+///
+/// # Examples
+///
+/// ```no_run
+/// use conpty_oxide::{SessionOptions, Size};
+///
+/// # fn main() -> conpty_oxide::Result<()> {
+/// let options = SessionOptions::new().size(Size::try_new(120, 40)?);
+/// # let _ = options;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct SessionOptions {
     size: Size,

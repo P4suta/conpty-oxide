@@ -26,9 +26,13 @@ Development and tests require Windows 10 version 1809 or later. Install
 [mise](https://mise.jdx.dev/), then run:
 
 ```powershell
+mise install
 just setup
 just doctor
 ```
+
+`mise install` provisions the pinned tools — including `just` itself — so it
+must run before the first `just` invocation.
 
 The project supports Rust 1.75 and the three MSVC Windows targets listed in
 `deny.toml`. The setup recipe installs pinned tools and repository hooks.
@@ -53,9 +57,11 @@ just pre-push
 just package-check
 ```
 
-Maintainers run `just ci` for the complete Windows, MSRV, public API, external
-DLL, documentation, and coverage gates. Scheduled mutation testing is a
-separate long-running workflow.
+CI runs those gates — Windows matrix, MSRV, public API, external DLL,
+documentation, coverage, plus the package smoke test — on every pull request;
+`just ci` reproduces them locally. Mutation testing runs as a separate
+scheduled workflow under the policy in
+[ADR 0001](docs/adr/0001-mutation-testing.md).
 
 ## Public API changes
 
