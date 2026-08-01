@@ -296,13 +296,18 @@ jobs:
         with:
           subject-checksums: ${{ runner.temp }}/provenance-subjects.sha256
 
+      # The dedicated sbom-path input misclassifies the document because it
+      # requires the optional CycloneDX serialNumber field. The generic
+      # predicate inputs produce the identical in-toto statement: the
+      # predicate is the BOM itself under the CycloneDX predicate type.
       - name: Create CycloneDX SBOM attestation
         id: sbom-attestation
         if: steps.inspect.outputs.state == 'draft'
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d  # v4.2.1
         with:
           subject-path: dist/${{ env.PACKAGE_NAME }}-${{ inputs.version }}.crate
-          sbom-path: dist/${{ env.PACKAGE_NAME }}-${{ inputs.version }}.cdx.json
+          predicate-type: ${{ env.CYCLONEDX_PREDICATE }}
+          predicate-path: dist/${{ env.PACKAGE_NAME }}-${{ inputs.version }}.cdx.json
 
       - name: Assemble the five release assets
         if: steps.inspect.outputs.state == 'draft'
