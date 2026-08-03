@@ -48,9 +48,6 @@ grow: each entry must carry a proof below and a matching narrow regex.
   tested.
 - Replacing bitwise OR with XOR in the external-DLL search flags is
   identical: `0x100` and `0x800` have no common bit.
-- Replacing bitwise OR with XOR in the process creation flags is identical:
-  `EXTENDED_STARTUPINFO_PRESENT` and `CREATE_UNICODE_ENVIRONMENT` have no
-  common bit.
 - Replacing bitwise OR with XOR in the legacy root wait flags is identical:
   `WT_EXECUTEONLYONCE` (`0x8`) and `WT_EXECUTELONGFUNCTION` (`0x10`) have no
   common bit. The exclusion is restricted to the operator at column 32 in

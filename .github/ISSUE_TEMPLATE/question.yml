@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+---
+name: Usage question
+description: Ask a focused question about using conpty-oxide
+title: "question: "
+labels: [question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context and attempted approach
+      description: >-
+        Include relevant sanitized code, the output of `winver`, the crate
+        version, and which feature flags are enabled.
+    validations:
+      required: true
+  - type: textarea
+    id: research
+    attributes:
+      label: Documentation already consulted
+      description: >-
+        Link the API documentation, example, ADR, or the ConPTY pitfalls
+        document section you checked.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and the API documentation.
+          required: true
+        - label: I checked docs/conpty-pitfalls.md for a documented behavior.
+          required: true
+        - label: This question does not contain a suspected vulnerability.
+          required: true

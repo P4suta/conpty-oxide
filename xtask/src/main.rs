@@ -23,13 +23,14 @@ fn main() -> ExitCode {
     let result = match arguments.first().map(String::as_str) {
         Some("fetch-conpty") => fetch_conpty::run(&arguments[1..]),
         Some("package-check") => package_check::run(),
+        Some("paired-package-check") => package_check::run_paired(),
         Some("public-api") => public_api::run(&arguments[1..]),
         Some("source-policy") => source_policy::run(),
         Some("verify-release") => verify_release::run(&arguments[1..]),
         Some("workflow-shells") => workflow_shells::run(&arguments[1..]),
         Some(other) => Err(anyhow::anyhow!(
             "unknown xtask subcommand `{other}`; available: fetch-conpty, package-check, \
-             public-api, source-policy, verify-release, workflow-shells"
+             paired-package-check, public-api, source-policy, verify-release, workflow-shells"
         )),
         None => Err(anyhow::anyhow!(
             "usage: cargo run --manifest-path xtask/Cargo.toml -- <subcommand>"

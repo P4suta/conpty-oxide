@@ -43,7 +43,9 @@ fn duplicated_handle(child: &Child) -> OwnedHandle {
 }
 
 fn watcher_job() -> Arc<Job> {
-    Arc::new(Job::create(true).expect("creating an empty watcher test Job must succeed"))
+    Arc::new(
+        crate::core::job::create(true).expect("creating an empty watcher test Job must succeed"),
+    )
 }
 
 /// A minimal executor whose Waker polls the registered wait immediately on

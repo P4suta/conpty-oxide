@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Default ownership for review routing.
+* @P4suta
+
+# Release automation and repository policy.
+/.github/ @P4suta
+
+# The dynamic ConPTY backend and the pseudoconsole lifetime state machine are
+# where every unsafe boundary and teardown hazard lives.
+/src/backend.rs @P4suta
+/src/backend/ @P4suta
+/src/core/pseudocon.rs @P4suta
+/src/core/wait.rs @P4suta
+
+# Design records and the pitfalls document consumers rely on.
+/docs/ @P4suta

@@ -4,12 +4,14 @@
 
 //! Child-process exit detection and managed root-exit shutdown.
 //!
-//! Exit detection is handle-based. Blocking waits use [`ProcessWaiter`] and
-//! `WaitForSingleObject`; the Tokio frontend uses `RegisteredWait` and
-//! `RegisterWaitForSingleObject`. Both read the exit code only *after* the
-//! process is signaled. Calling `GetExitCodeProcess` on a running process
-//! "succeeds" with `STILL_ACTIVE` (259), indistinguishable from a real exit
-//! code of 259, so the ordering is the protocol.
+//! Exit detection is handle-based. Blocking child waits delegate to
+//! `windows_spawn::Child`; the Tokio frontend uses `RegisteredWait` and
+//! `RegisterWaitForSingleObject`. This module's private [`ProcessWaiter`]
+//! owns duplicated handles used by registered waits and the managed root
+//! watcher. Every path reads the exit code only *after* the process is
+//! signaled. Calling `GetExitCodeProcess` on a running process "succeeds"
+//! with `STILL_ACTIVE` (259), indistinguishable from a real exit code of 259,
+//! so the ordering is the protocol.
 //!
 //! The other half is [`spawn_root_watcher`]. Every managed session registers
 //! it so root exit terminates descendants still in the session Job. On Windows
@@ -35,12 +37,16 @@ use std::thread;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::ERROR_IO_PENDING;
-use windows_sys::Win32::Foundation::{
-    HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
-};
+use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+#[cfg(test)]
+use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
+#[cfg(any(test, feature = "tokio"))]
+use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+#[cfg(test)]
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, RegisterWaitForSingleObject, UnregisterWaitEx, WaitForSingleObject,
-    INFINITE, WT_EXECUTELONGFUNCTION, WT_EXECUTEONLYONCE,
+    RegisterWaitForSingleObject, UnregisterWaitEx, INFINITE, WT_EXECUTELONGFUNCTION,
+    WT_EXECUTEONLYONCE,
 };
 
 use crate::core::job::{Job, KILL_EXIT_CODE};
@@ -82,7 +88,7 @@ impl ProcessWaiter {
     ///
     /// Returns the OS error from `WaitForSingleObject` or
     /// `GetExitCodeProcess`.
-    #[cfg(any(feature = "blocking", test))]
+    #[cfg(test)]
     pub(crate) fn wait(&self) -> io::Result<u32> {
         // SAFETY: the handle is owned by `self` and thus live for the call.
         let waited = unsafe { WaitForSingleObject(self.process.as_raw_handle(), INFINITE) };
@@ -104,6 +110,7 @@ impl ProcessWaiter {
     ///
     /// Returns the OS error from `WaitForSingleObject` or
     /// `GetExitCodeProcess`.
+    #[cfg(test)]
     pub(crate) fn try_wait(&self) -> io::Result<Option<u32>> {
         // SAFETY: the handle is owned by `self` and thus live for the call.
         let waited = unsafe { WaitForSingleObject(self.process.as_raw_handle(), 0) };
@@ -121,6 +128,7 @@ impl ProcessWaiter {
     ///
     /// Only called after a wait has confirmed the exit; on a still-running
     /// process the OS would "successfully" report `STILL_ACTIVE` (259) here.
+    #[cfg(any(test, feature = "tokio"))]
     fn exit_code(&self) -> io::Result<u32> {
         let mut code: u32 = 0;
         // SAFETY: the handle is owned by `self`, and `code` is a valid
@@ -133,8 +141,7 @@ impl ProcessWaiter {
     }
 }
 
-/// Borrows the process handle, e.g. to duplicate it for a watcher or to expose
-/// it through the public `Child` API.
+/// Borrows the process handle for registered-wait and watcher setup.
 impl AsHandle for ProcessWaiter {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.process.as_handle()

@@ -112,6 +112,10 @@ coverage: fetch-conpty
     cargo llvm-cov report --lcov --output-path target/llvm-cov/lcov.info --fail-under-lines 92 --fail-under-regions 92 --fail-under-functions 92
     cargo llvm-cov report --html --output-dir target/llvm-cov/html
 
+# Repeat lifecycle races in one process and enforce the handle/PID leak budget.
+soak:
+    $env:CONPTY_OXIDE_RUN_SOAK = '1'; cargo test --all-features --locked --test soak -- --exact scheduled_lifecycle_soak --nocapture --test-threads=1
+
 # List mutation candidates without changing source files.
 mutants-list:
     cargo mutants --list
@@ -127,6 +131,10 @@ mutants-ci shard: fetch-conpty
 # Build and smoke-test the exact normalized source Cargo would publish.
 package-check:
     cargo run --manifest-path xtask/Cargo.toml --locked -- package-check
+
+# Build and test the unpublished conpty-oxide/windows-spawn package pair.
+paired-package-check:
+    cargo run --manifest-path xtask/Cargo.toml --locked -- paired-package-check
 
 # Verify the latest immutable release, or the supplied v-prefixed tag.
 verify-release tag='':

@@ -30,16 +30,17 @@
 //! contract.
 
 use std::io;
+use std::os::windows::io::{AsHandle, OwnedHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::backend::BackendKind;
 use crate::command::Command;
-use crate::core::job::Job;
 pub(crate) use crate::core::job::KILL_EXIT_CODE;
-use crate::core::proc::{self, SpawnedChild};
+use crate::core::job::{self, Job};
+use crate::core::proc;
 use crate::core::pseudocon::PseudoConsole;
-use crate::core::wait::{spawn_root_watcher, ProcessWaiter, LEGACY_CLOSE_GRACE};
+use crate::core::wait::{spawn_root_watcher, LEGACY_CLOSE_GRACE};
 use crate::error::{Error, Result};
 use crate::size::Size;
 
@@ -149,8 +150,8 @@ impl Session {
 /// — not the process — is what kills the whole tree.
 #[derive(Debug)]
 pub(crate) struct RootChild {
-    /// Exit detection for the root process itself.
-    pub(super) waiter: ProcessWaiter,
+    /// The windows-spawn-owned root process and its status cache.
+    pub(super) child: windows_spawn::Child,
     /// The job object the child and all its descendants belong to.
     pub(super) job: Arc<Job>,
     /// The root child's process identifier.
@@ -180,9 +181,21 @@ pub(crate) struct RootChild {
 /// session, or the raw OS error from `CreateProcessW`.
 pub(crate) fn spawn_root(
     session: &Session,
-    command: &Command,
+    command: &mut Command,
     kill_on_drop: bool,
 ) -> Result<RootChild> {
+    spawn_root_with_watcher_handle(session, command, kill_on_drop, duplicate_watcher_handle)
+}
+
+fn spawn_root_with_watcher_handle<F>(
+    session: &Session,
+    command: &mut Command,
+    kill_on_drop: bool,
+    duplicate: F,
+) -> Result<RootChild>
+where
+    F: FnOnce(&windows_spawn::Child) -> io::Result<OwnedHandle>,
+{
     if session.spawned.swap(true, Ordering::SeqCst) {
         return Err(spawn_error(
             command,
@@ -193,7 +206,7 @@ pub(crate) fn spawn_root(
         ));
     }
 
-    let (job, spawned) = match create_child(session, command, kill_on_drop) {
+    let (job, child) = match create_child(session, command, kill_on_drop) {
         Ok(started) => started,
         Err(err) => {
             // Nothing was attached to the pseudoconsole and no watcher ran, so
@@ -203,6 +216,7 @@ pub(crate) fn spawn_root(
         },
     };
     session.attached.store(true, Ordering::SeqCst);
+    let pid = child.id();
 
     // Step two of the lifecycle, immediately after the child exists: hand the
     // pseudoconsole its own lifetime back, so that it exits when the last
@@ -220,20 +234,21 @@ pub(crate) fn spawn_root(
     // Step three for every backend: root exit bounds the whole managed tree.
     // Legacy sessions additionally use this registration to force EOF.
     let close_legacy = should_close_legacy_on_root_exit(released, session.eof_on_root_exit);
-    if let Err(err) = arm_root_watcher(session, &spawned, &job, close_legacy) {
+    if let Err(err) = arm_root_watcher(session, &child, &job, close_legacy, duplicate) {
         // A session without a root watcher cannot uphold its managed lifecycle
         // contract. Terminate the child rather than return it; `spawned`
         // deliberately stays `true`, because the session is now retired.
         if let Err(kill_err) = job.terminate(KILL_EXIT_CODE) {
             log_spawn_cleanup_failure(&kill_err);
         }
+        session.console.shared().request_close_detached();
         return Err(spawn_error(command, err));
     }
 
     Ok(RootChild {
-        waiter: ProcessWaiter::new(spawned.process),
+        child,
         job,
-        pid: spawned.pid,
+        pid,
         kill_on_drop,
     })
 }
@@ -250,12 +265,13 @@ const fn should_close_legacy_on_root_exit(released: bool, eof_on_root_exit: bool
 /// Creates the job object and the process itself.
 fn create_child(
     session: &Session,
-    command: &Command,
+    command: &mut Command,
     kill_on_drop: bool,
-) -> io::Result<(Arc<Job>, SpawnedChild)> {
-    let job = Arc::new(Job::create(kill_on_drop)?);
-    let spawned = proc::spawn(command, session.console.hpcon(), &job)?;
-    Ok((job, spawned))
+) -> io::Result<(Arc<Job>, windows_spawn::Child)> {
+    let job = Arc::new(job::create(kill_on_drop)?);
+    let pseudoconsole = session.console.spawn_capability()?;
+    let child = proc::spawn(command, &pseudoconsole, &job)?;
+    Ok((job, child))
 }
 
 /// Starts the watcher that bounds the managed tree and, when needed, forces EOF.
@@ -263,15 +279,17 @@ fn create_child(
 /// The watcher gets its own duplicate of the process handle so it is
 /// independent of the `Child` the caller receives — which may be dropped long
 /// before the child exits.
-fn arm_root_watcher(
+fn arm_root_watcher<F>(
     session: &Session,
-    spawned: &SpawnedChild,
+    child: &windows_spawn::Child,
     job: &Arc<Job>,
     close_legacy: bool,
-) -> io::Result<()> {
-    use std::os::windows::io::AsHandle;
-
-    let watched = spawned.process.as_handle().try_clone_to_owned()?;
+    duplicate: F,
+) -> io::Result<()>
+where
+    F: FnOnce(&windows_spawn::Child) -> io::Result<OwnedHandle>,
+{
+    let watched = duplicate(child)?;
     spawn_root_watcher(
         watched,
         Arc::downgrade(job),
@@ -279,6 +297,10 @@ fn arm_root_watcher(
         LEGACY_CLOSE_GRACE,
         close_legacy,
     )
+}
+
+fn duplicate_watcher_handle(child: &windows_spawn::Child) -> io::Result<OwnedHandle> {
+    child.as_handle().try_clone_to_owned()
 }
 
 /// Wraps a spawn failure with the program that could not be started.
@@ -317,15 +339,22 @@ const fn log_spawn_cleanup_failure(_err: &io::Error) {}
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "tracing")]
     use std::io;
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use std::mem::size_of;
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 
     #[cfg(any(feature = "blocking", feature = "tokio"))]
     use std::sync::atomic::Ordering;
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use std::time::{Duration, Instant};
 
     use super::should_close_legacy_on_root_exit;
     #[cfg(feature = "tracing")]
     use super::{log_release_failure, log_spawn_cleanup_failure};
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use super::{spawn_root, spawn_root_with_watcher_handle, Session};
 
     #[cfg(any(feature = "blocking", feature = "tokio"))]
     use crate::backend::ConPtyBackend;
@@ -334,7 +363,64 @@ mod tests {
     #[cfg(any(feature = "blocking", feature = "tokio"))]
     use crate::core::pseudocon::PseudoConsole;
     #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use crate::error::ErrorKind;
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
     use crate::size::Size;
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    fn process_is_running(pid: u32) -> bool {
+        // SAFETY: OpenProcess receives a process identifier observed from a
+        // child we created and requests only synchronization access.
+        let raw = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
+        if raw.is_null() {
+            return false;
+        }
+        // SAFETY: a non-null successful OpenProcess result is a uniquely owned
+        // handle and is adopted exactly once.
+        let process = unsafe { OwnedHandle::from_raw_handle(raw as RawHandle) };
+        // SAFETY: the owned process handle remains valid for this zero-timeout
+        // wait and needs no writable output buffers.
+        unsafe { WaitForSingleObject(process.as_raw_handle(), 0) == WAIT_TIMEOUT }
+    }
+
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    fn direct_child_of(root: u32) -> Option<u32> {
+        // SAFETY: this requests an owned snapshot of the current process list
+        // and carries no caller-provided pointers.
+        let raw = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if raw == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        // SAFETY: a successful snapshot call returns one uniquely owned handle.
+        let snapshot = unsafe { OwnedHandle::from_raw_handle(raw as RawHandle) };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: u32::try_from(size_of::<PROCESSENTRY32W>())
+                .expect("PROCESSENTRY32W size fits in u32"),
+            ..Default::default()
+        };
+        // SAFETY: snapshot remains live and entry is a correctly sized,
+        // writable PROCESSENTRY32W output buffer.
+        let mut present = unsafe { Process32FirstW(snapshot.as_raw_handle(), &mut entry) } != 0;
+        while present {
+            if entry.th32ParentProcessID == root {
+                return Some(entry.th32ProcessID);
+            }
+            // SAFETY: the same snapshot and output buffer remain live.
+            present = unsafe { Process32NextW(snapshot.as_raw_handle(), &mut entry) } != 0;
+        }
+        None
+    }
 
     #[test]
     fn legacy_close_requires_both_legacy_mode_and_eof_policy() {
@@ -357,7 +443,7 @@ mod tests {
         let console = PseudoConsole::new(backend, Size::default(), conin_read, conout_write, false)
             .expect("CreatePseudoConsole must succeed");
         let shared = std::sync::Arc::clone(console.shared());
-        let session = super::Session::new(console, true);
+        let session = Session::new(console, true);
 
         // Retire the raw reader so either backend can claim close promptly;
         // this test observes the Session-to-lifecycle request, not host I/O.
@@ -378,6 +464,80 @@ mod tests {
         );
 
         drop(conin_write);
+    }
+
+    #[cfg(any(feature = "blocking", feature = "tokio"))]
+    #[test]
+    fn watcher_handle_duplication_failure_retires_and_kills_the_tree() {
+        let backend = ConPtyBackend::system().expect("ConPTY must be available");
+        let SyncPipes {
+            conout_read,
+            conout_write,
+            conin_read,
+            conin_write,
+        } = create_sync_pipes().expect("creating pipes must succeed");
+        let console = PseudoConsole::new(backend, Size::default(), conin_read, conout_write, false)
+            .expect("CreatePseudoConsole must succeed");
+        let session = Session::new(console, true);
+
+        let mut command = crate::command::Command::new("cmd.exe");
+        command.args(["/D", "/S", "/C"]).raw_arg(
+            "start \"\" /b ping.exe -t 127.0.0.1 >nul & +             ping.exe -n 30 127.0.0.1 >nul",
+        );
+
+        let mut observed = None;
+        let error = spawn_root_with_watcher_handle(&session, &mut command, false, |child| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut descendant = direct_child_of(child.id());
+            while descendant.is_none() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+                descendant = direct_child_of(child.id());
+            }
+            let root = child.id();
+            let descendant =
+                descendant.ok_or_else(|| io::Error::other("no descendant appeared"))?;
+            observed = Some((root, descendant));
+            Err(io::Error::other(
+                "injected watcher handle duplication failure",
+            ))
+        })
+        .expect_err("watcher handle duplication failure must fail the spawn");
+        assert_eq!(error.kind(), ErrorKind::Spawn);
+        assert_eq!(
+            error.io_error().map(io::Error::kind),
+            Some(io::ErrorKind::Other)
+        );
+        assert!(error
+            .io_error()
+            .is_some_and(|source| source.to_string().contains("injected watcher")));
+
+        let mut second = crate::command::Command::new("cmd.exe");
+        let reused = spawn_root(&session, &mut second, false)
+            .expect_err("a post-creation failure must retire the pseudoconsole");
+        assert_eq!(reused.kind(), ErrorKind::Spawn);
+        assert_eq!(
+            reused.io_error().map(io::Error::kind),
+            Some(io::ErrorKind::AlreadyExists)
+        );
+
+        let (root, descendant) = observed.expect("the injected failure observed both pids");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (process_is_running(root) || process_is_running(descendant))
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !process_is_running(root),
+            "the root process survived cleanup"
+        );
+        assert!(
+            !process_is_running(descendant),
+            "the descendant process survived cleanup"
+        );
+
+        drop(conin_write);
+        drop(conout_read);
     }
 
     #[cfg(feature = "tracing")]

@@ -174,6 +174,27 @@ pub(crate) struct ConsoleShared {
     state: Mutex<State>,
 }
 
+/// A live HPCON borrow held under the lifecycle mutex for one process spawn.
+///
+/// Keeping the guard inside this private capability prevents close, resize,
+/// release, or clear from reaching the backend while `CreateProcessW` is
+/// consuming the pseudoconsole attribute.
+#[derive(Debug)]
+pub(super) struct SpawnCapability<'a> {
+    hpcon: HPCON,
+    _state: MutexGuard<'a, State>,
+}
+
+// SAFETY: construction rejects a closed HPCON and retains the lifecycle state
+// guard for the complete borrow. Every operation that can use or close the
+// HPCON takes the same mutex, so its value stays live and unchanged throughout
+// windows-spawn's process-creation transaction.
+unsafe impl windows_spawn::AsPseudoConsole for SpawnCapability<'_> {
+    fn raw_pseudoconsole(&self) -> isize {
+        self.hpcon
+    }
+}
+
 impl ConsoleShared {
     /// Locks the state, recovering from poisoning.
     ///
@@ -727,18 +748,30 @@ impl PseudoConsole {
         })
     }
 
-    /// Returns the raw `HPCON`, for `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`.
-    ///
-    /// The value stays valid for as long as this `PseudoConsole` is alive and
-    /// un-closed; do not store it beyond that.
-    pub(crate) fn hpcon(&self) -> HPCON {
-        self.shared.hpcon
-    }
-
     /// Returns the shared lifecycle core, for wiring up the reader wrapper
     /// and the legacy watcher.
     pub(crate) const fn shared(&self) -> &Arc<ConsoleShared> {
         &self.shared
+    }
+
+    /// Borrows the HPCON for one process-creation transaction.
+    pub(super) fn spawn_capability(&self) -> io::Result<SpawnCapability<'_>> {
+        let state = self.shared.lock();
+        if state.close == CloseState::Done {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "the pseudoconsole has been closed",
+            ));
+        }
+        Ok(SpawnCapability {
+            hpcon: self.shared.hpcon,
+            _state: state,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hpcon(&self) -> HPCON {
+        self.shared.hpcon
     }
 
     /// See [`ConsoleShared::release_after_spawn`].

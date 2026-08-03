@@ -132,7 +132,7 @@ compile_error!(
 #[cfg(any(feature = "blocking", feature = "tokio"))]
 mod api;
 mod backend;
-#[cfg(any(feature = "blocking", feature = "tokio", test))]
+#[cfg(any(feature = "blocking", feature = "tokio"))]
 mod command;
 #[cfg(any(feature = "blocking", feature = "tokio", test))]
 mod core;

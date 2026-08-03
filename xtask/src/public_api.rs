@@ -32,7 +32,13 @@ const SHAPES: [(&str, Option<&str>); 4] = [
 ];
 
 /// Substrings that reveal a private dependency in rendered API text.
-const DEPENDENCY_MARKERS: [&str; 4] = ["windows_sys", "thiserror", "mio::", "socket2::"];
+const DEPENDENCY_MARKERS: [&str; 5] = [
+    "windows_spawn",
+    "windows_sys",
+    "thiserror",
+    "mio::",
+    "socket2::",
+];
 
 const UTF8_BOM: &str = "\u{feff}";
 

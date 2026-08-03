@@ -200,8 +200,8 @@ impl Command {
         self.spawn_in_with_policy(pty, self.inner.get_kill_on_drop())
     }
 
-    fn spawn_in_with_policy(&self, pty: &Pty, kill_on_drop: bool) -> Result<Child> {
-        let root = session::spawn_root(&pty.inner, &self.inner, kill_on_drop)?;
+    fn spawn_in_with_policy(&mut self, pty: &Pty, kill_on_drop: bool) -> Result<Child> {
+        let root = session::spawn_root(&pty.inner, &mut self.inner, kill_on_drop)?;
         Ok(Child {
             core: ChildCore::from_root(root),
         })

@@ -78,6 +78,29 @@ fn create_yields_a_live_console() {
 }
 
 #[test]
+fn spawn_capability_exists_only_while_the_hpcon_is_live() {
+    let (console, conout_read, conin_write) = console_and_user_ends(backend());
+    {
+        let capability = console
+            .spawn_capability()
+            .expect("an open pseudoconsole must be spawnable");
+        assert_eq!(
+            windows_spawn::AsPseudoConsole::raw_pseudoconsole(&capability),
+            console.hpcon()
+        );
+    }
+
+    drop(conout_read);
+    console.shared().notify_reader_closed();
+    console.shared().request_close();
+    let error = console
+        .spawn_capability()
+        .expect_err("a closed pseudoconsole must not yield a spawn capability");
+    assert_eq!(error.kind(), io::ErrorKind::NotConnected);
+    drop(conin_write);
+}
+
+#[test]
 fn resize_succeeds_while_open_and_fails_after_close() {
     let (console, conout_read, conin_write) = console_and_user_ends(backend());
     console
