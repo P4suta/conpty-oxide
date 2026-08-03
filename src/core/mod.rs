@@ -10,7 +10,8 @@
 //! built on top of them, the job object that owns the child's process tree,
 //! the `CreateProcessW` call that attaches a child to both, child-process exit
 //! detection, and the session state and spawn order the two front ends share
-//! verbatim.
+//! verbatim. Process creation, command lowering, and Job FFI are delegated to
+//! `windows-spawn`; ConPTY pipe and lifecycle ownership stays here.
 //!
 //! # Why `ConPTY` only ever gets synchronous handles
 //!
@@ -30,6 +31,7 @@ mod job;
 #[cfg(any(feature = "blocking", feature = "tokio"))]
 pub(super) mod options;
 pub(super) mod pipes;
+#[cfg(any(feature = "blocking", feature = "tokio"))]
 mod proc;
 pub(super) mod pseudocon;
 #[cfg(any(feature = "blocking", feature = "tokio"))]

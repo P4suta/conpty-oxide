@@ -4,7 +4,7 @@
 
 [package]
 name = "conpty-oxide"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
@@ -45,13 +45,18 @@ name = "tokio_interactive"
 required-features = ["tokio"]
 
 [target.'cfg(windows)'.dependencies]
+windows-spawn = { version = "0.1.0", path = "../windows-spawn" }
 thiserror = "2"
 tokio = { version = "1", optional = true, features = ["net", "rt"] }
 tracing = { version = "0.1", optional = true }
 
 [target.'cfg(windows)'.dev-dependencies.windows-sys]
 version = "0.61"
-features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp"]
+features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_JobObjects",
+]
 
 # Tests, doctests, and the `tokio_interactive` example need more of tokio than
 # the library does — a runtime to start, the `#[tokio::test]` macro, the
@@ -66,12 +71,10 @@ features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"]
 version = "0.61"
 features = [
   "Win32_Foundation",
-  "Win32_Globalization",
   "Win32_System_Console",
   "Win32_System_Diagnostics_Debug",
   "Win32_System_Pipes",
   "Win32_System_Threading",
-  "Win32_System_JobObjects",
   "Win32_System_LibraryLoader",
   "Win32_System_SystemInformation",
   "Win32_Storage_FileSystem",

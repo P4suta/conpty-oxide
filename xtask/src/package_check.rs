@@ -79,13 +79,43 @@ const CONSUMERS: [Consumer; 2] = [
 ];
 
 pub fn run() -> Result<()> {
+    run_impl(false)
+}
+
+pub fn run_paired() -> Result<()> {
+    run_impl(true)
+}
+
+fn run_impl(paired: bool) -> Result<()> {
     let root = repository_root()?;
     let workspace = root.join("target/package-check");
+    let paired_sibling = if paired {
+        let sibling = root
+            .parent()
+            .context("the repository root has no parent for a sibling checkout")?
+            .join("windows-spawn");
+        ensure!(
+            sibling.join("Cargo.toml").is_file(),
+            "paired development requires a sibling windows-spawn checkout at {}",
+            sibling.display()
+        );
+        Some(sibling)
+    } else {
+        None
+    };
 
     let (name, version, target_directory) = root_package(root)?;
+    let package_patch = paired_sibling.as_ref().map(|sibling| {
+        let path = sibling.to_string_lossy().replace(char::from(92), "/");
+        format!("patch.crates-io.windows-spawn.path='{path}'")
+    });
+    let mut package_arguments = vec!["package", "--locked", "--allow-dirty", "--no-verify"];
+    if let Some(package_patch) = &package_patch {
+        package_arguments.extend(["--config", package_patch]);
+    }
     run_checked(
         "cargo",
-        &["package", "--locked", "--allow-dirty", "--no-verify"],
+        &package_arguments,
         root,
         &[],
         "Creating the normalized Cargo package",
@@ -97,6 +127,32 @@ pub fn run() -> Result<()> {
         "cargo package did not create {}",
         archive.display()
     );
+
+    let paired_archive = if let Some(sibling) = paired_sibling {
+        let (dependency_name, dependency_version, dependency_target) = root_package(&sibling)?;
+        ensure!(
+            dependency_name == "windows-spawn" && dependency_version == "0.1.0",
+            "expected sibling windows-spawn 0.1.0, found {dependency_name} {dependency_version}"
+        );
+        run_checked(
+            "cargo",
+            &["package", "--locked", "--allow-dirty", "--no-verify"],
+            &sibling,
+            &[],
+            "Creating the normalized windows-spawn package",
+        )?;
+        let dependency_archive = dependency_target.join(format!(
+            "package/{dependency_name}-{dependency_version}.crate"
+        ));
+        ensure!(
+            dependency_archive.is_file(),
+            "cargo package did not create {}",
+            dependency_archive.display()
+        );
+        Some((dependency_name, dependency_version, dependency_archive))
+    } else {
+        None
+    };
 
     if workspace.exists() {
         fs::remove_dir_all(&workspace)
@@ -114,6 +170,19 @@ pub fn run() -> Result<()> {
         "the archive did not contain the expected {} root",
         package_source.display()
     );
+    let windows_spawn_source =
+        if let Some((dependency_name, dependency_version, dependency_archive)) = paired_archive {
+            extract_crate(&dependency_archive, &source_parent)?;
+            let source = source_parent.join(format!("{dependency_name}-{dependency_version}"));
+            ensure!(
+                source.is_dir(),
+                "the windows-spawn archive did not contain {}",
+                source.display()
+            );
+            Some(source)
+        } else {
+            None
+        };
 
     let mut files = Vec::new();
     collect_relative_files(&package_source, &package_source, &mut files)?;
@@ -139,6 +208,12 @@ pub fn run() -> Result<()> {
     check_markdown_links(&package_source)?;
     println!("Published Markdown links passed.");
 
+    if let Some(windows_spawn_source) = &windows_spawn_source {
+        check_normalized_windows_spawn_dependency(&package_source.join("Cargo.toml"))?;
+        write_patch_config(&package_source, windows_spawn_source)?;
+        println!("Normalized windows-spawn registry dependency passed.");
+    }
+
     let build_directory = workspace.join("build");
     let build_env = [(
         "CARGO_TARGET_DIR",
@@ -157,13 +232,24 @@ pub fn run() -> Result<()> {
         ("all-features", &["--all-features"]),
     ];
     for (shape_name, shape_arguments) in shapes {
-        let mut arguments = vec![
-            "check",
-            "--manifest-path",
-            &manifest,
-            "--locked",
-            "--all-targets",
-        ];
+        let mut arguments = if paired {
+            vec![
+                "+1.75.0",
+                "check",
+                "--manifest-path",
+                &manifest,
+                "--locked",
+                "--all-targets",
+            ]
+        } else {
+            vec![
+                "check",
+                "--manifest-path",
+                &manifest,
+                "--locked",
+                "--all-targets",
+            ]
+        };
         arguments.extend_from_slice(shape_arguments);
         run_checked(
             "cargo",
@@ -174,6 +260,25 @@ pub fn run() -> Result<()> {
         )?;
     }
 
+    if let Some(windows_spawn_source) = &windows_spawn_source {
+        let dependency_manifest = windows_spawn_source.join("Cargo.toml");
+        let dependency_manifest = dependency_manifest.to_string_lossy();
+        run_checked(
+            "cargo",
+            &[
+                "+1.75.0",
+                "check",
+                "--manifest-path",
+                &dependency_manifest,
+                "--locked",
+                "--all-targets",
+            ],
+            windows_spawn_source,
+            &build_env,
+            "Checking the normalized windows-spawn package with Rust 1.75",
+        )?;
+    }
+
     let dependency_path = package_source.to_string_lossy().replace('\\', "/");
     let lock_version_pattern = Regex::new(r"(?m)^version = (?P<version>[0-9]+)\r?$")
         .context("lockfile-version pattern")?;
@@ -181,12 +286,13 @@ pub fn run() -> Result<()> {
         let consumer_root = workspace.join("consumers").join(consumer.directory);
         fs::create_dir_all(consumer_root.join("src"))
             .with_context(|| format!("failed to create {}", consumer_root.display()))?;
-        write_normalized(
-            &consumer_root.join("Cargo.toml"),
-            &consumer
-                .manifest
-                .replace("@DEPENDENCY_PATH@", &dependency_path),
-        )?;
+        let mut consumer_manifest = consumer
+            .manifest
+            .replace("@DEPENDENCY_PATH@", &dependency_path);
+        if let Some(windows_spawn_source) = &windows_spawn_source {
+            consumer_manifest.push_str(&patch_section(windows_spawn_source));
+        }
+        write_normalized(&consumer_root.join("Cargo.toml"), &consumer_manifest)?;
         write_normalized(&consumer_root.join("src/main.rs"), consumer.main)?;
 
         let consumer_manifest = consumer_root.join("Cargo.toml");
@@ -344,6 +450,54 @@ fn collect_relative_files(root: &Path, directory: &Path, files: &mut Vec<String>
         }
     }
     Ok(())
+}
+
+fn check_normalized_windows_spawn_dependency(manifest: &Path) -> Result<()> {
+    let contents = fs::read_to_string(manifest)
+        .with_context(|| format!("failed to read {}", manifest.display()))?;
+    ensure!(
+        !contents.contains("../windows-spawn"),
+        "the normalized conpty-oxide manifest retained the local dependency path"
+    );
+    let section = contents
+        .split("\n[")
+        .find(|section| {
+            section
+                .lines()
+                .next()
+                .is_some_and(|header| header.contains("dependencies.windows-spawn]"))
+        })
+        .context("the normalized manifest has no windows-spawn dependency section")?;
+    ensure!(
+        section
+            .lines()
+            .any(|line| line.trim() == r#"version = "0.1.0""#),
+        "the normalized windows-spawn dependency is not exactly version 0.1.0"
+    );
+    ensure!(
+        !section
+            .lines()
+            .any(|line| line.trim_start().starts_with("path =")),
+        "the normalized windows-spawn dependency retained a path"
+    );
+    Ok(())
+}
+
+fn patch_section(windows_spawn_source: &Path) -> String {
+    let path = windows_spawn_source
+        .to_string_lossy()
+        .replace(char::from(92), "/");
+    format!("\n[patch.crates-io]\nwindows-spawn = {{ path = \"{path}\" }}\n")
+}
+
+fn write_patch_config(package_source: &Path, windows_spawn_source: &Path) -> Result<()> {
+    let config_directory = package_source.join(".cargo");
+    fs::create_dir_all(&config_directory)
+        .with_context(|| format!("failed to create {}", config_directory.display()))?;
+    write_normalized(
+        &config_directory.join("config.toml"),
+        &patch_section(windows_spawn_source),
+    )
 }
 
 /// Writes generated consumer sources with Unix newlines, matching the

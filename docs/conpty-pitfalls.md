@@ -327,19 +327,20 @@ process handle owns one process; the tree needs a job object.
 list, kills the session, and requires the grandchild to disappear. It runs in
 both lifecycle modes.
 
-**In this crate.** `ProcessWaiter` in `src/core/wait.rs` implements blocking
-`wait` and the shared zero-timeout `try_wait`. Tokio `Child::wait` duplicates
-the process handle into a one-shot Windows registered wait instead, so no
-runtime or crate thread is parked while the child lives. Both paths read the
-exit code only after Windows has signalled the process. The job object in
-`src/core/job.rs` is created before the process and attached with
-`PROC_THREAD_ATTRIBUTE_JOB_LIST`, so the child joins the job before its first
-instruction — no `CREATE_SUSPENDED`/`AssignProcessToJobObject`/`ResumeThread`
-dance, and no window in which a grandchild could escape. `Child::kill`
-terminates the job, not the process. Note that the console host is *not* in the
-job: it is a child of the calling process created by `CreatePseudoConsole`, so
-killing the tree ends the session's programs and leaves the pseudoconsole to
-the lifecycle state machine, exactly as an ordinary exit would.
+**In this crate.** Blocking `Child::wait` and `try_wait` delegate to the
+`windows_spawn::Child` that owns the process handle and status cache. Tokio
+`Child::wait` duplicates that handle into a one-shot Windows registered wait,
+so no runtime or crate thread is parked while the child lives. Both paths read
+the exit code only after Windows has signalled the process. The thin adapter in
+`src/core/job.rs` creates a `windows_spawn::Job`; windows-spawn attaches it
+with `PROC_THREAD_ATTRIBUTE_JOB_LIST` during the same `CreateProcessW`
+transaction, so the child joins before its first instruction — no
+`CREATE_SUSPENDED`/`AssignProcessToJobObject`/`ResumeThread` dance, and no
+window in which a grandchild could escape. `Child::kill` terminates the job,
+not the process. Note that the console host is *not* in the job: it is a child
+of the calling process created by `CreatePseudoConsole`, so killing the tree
+ends the session's programs and leaves the pseudoconsole to the lifecycle
+state machine, exactly as an ordinary exit would.
 
 **Sources.**
 

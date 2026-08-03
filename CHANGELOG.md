@@ -12,6 +12,41 @@ with Cargo's additional pre-1.0 compatibility rules.
 
 ## [Unreleased]
 
+### Added
+
+- A temporary, downstream-owned pre-publication package check expands both
+  local crates, patches the normalized `windows-spawn` package into
+  `conpty-oxide`, and verifies Rust 1.75, all five feature shapes, and
+  blocking/Tokio external consumers without adding a reverse dependency.
+- An opt-in 64-iteration lifecycle soak repeats large-output teardown,
+  resize/close races, managed drop orders, Tokio cancellation, and EOF while
+  enforcing a post-warm-up process-handle budget and checking every recorded
+  root and grandchild PID is gone.
+- `SUPPORT.md`, a usage-question issue form, and `CODEOWNERS`, matching the
+  governance files the sibling Windows crates already ship.
+
+### Changed
+
+- Process command lowering, standard I/O inheritance, attribute lists,
+  atomic Job attachment, and synchronous child control now delegate to
+  `windows-spawn` 0.1.0 through a one-way internal dependency. ConPTY creation,
+  registered waits, Tokio integration, and the public API remain unchanged.
+- The unsafe pseudoconsole bridge is now implemented only by a private,
+  mutex-guarded spawn capability, preventing close or resize from racing
+  `CreateProcessW`.
+
+### Fixed
+
+- The README no longer opens with pre-publication bootstrap instructions. That
+  paragraph documented the sibling `windows-spawn` checkout above the install
+  snippet, and the README ships to crates.io and docs.rs, so it reached
+  consumers as if it were usage guidance. It now lives in `CONTRIBUTING.md`.
+- ConPTY child standard input, output, and error remain attached to the
+  pseudoconsole instead of falling back to redirected parent streams.
+- A failure to duplicate the root-watcher process handle now terminates the
+  session Job, closes and permanently retires the pseudoconsole, and reports a
+  spawn-phase error.
+
 ## [0.1.1] - 2026-08-01
 
 ### Fixed

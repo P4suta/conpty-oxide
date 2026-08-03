@@ -3,8 +3,16 @@
 
 use super::*;
 
+use std::io;
+use std::mem::size_of;
+use std::os::windows::io::{AsHandle, AsRawHandle};
+use std::ptr;
+
 use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
-use windows_sys::Win32::System::JobObjects::{QueryInformationJobObject, JOB_OBJECT_LIMIT};
+use windows_sys::Win32::System::JobObjects::{
+    JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+};
 
 /// Reads back the job's extended limit information.
 fn limit_flags(job: &Job) -> JOB_OBJECT_LIMIT {
@@ -14,7 +22,7 @@ fn limit_flags(job: &Job) -> JOB_OBJECT_LIMIT {
     // valid out-parameters of the sizes the information class expects.
     let ok = unsafe {
         QueryInformationJobObject(
-            job.raw_handle(),
+            job.as_handle().as_raw_handle(),
             JobObjectExtendedLimitInformation,
             ptr::addr_of_mut!(limits).cast(),
             u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
@@ -33,13 +41,13 @@ fn limit_flags(job: &Job) -> JOB_OBJECT_LIMIT {
 
 #[test]
 fn create_without_kill_on_close_sets_no_limits() {
-    let job = Job::create(false).expect("creating a job must succeed");
+    let job = create(false).expect("creating a job must succeed");
     assert_eq!(limit_flags(&job), 0);
 }
 
 #[test]
 fn create_with_kill_on_close_sets_the_limit() {
-    let job = Job::create(true).expect("creating a job must succeed");
+    let job = create(true).expect("creating a job must succeed");
     assert_eq!(
         limit_flags(&job) & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -48,10 +56,10 @@ fn create_with_kill_on_close_sets_the_limit() {
 
 #[test]
 fn the_handle_is_not_inheritable() {
-    let job = Job::create(true).expect("creating a job must succeed");
+    let job = create(true).expect("creating a job must succeed");
     let mut flags: u32 = 0;
     // SAFETY: the handle is live and `flags` is a valid out-parameter.
-    let ok = unsafe { GetHandleInformation(job.raw_handle(), &mut flags) };
+    let ok = unsafe { GetHandleInformation(job.as_handle().as_raw_handle(), &mut flags) };
     assert_ne!(
         ok,
         0,
@@ -63,7 +71,7 @@ fn the_handle_is_not_inheritable() {
 
 #[test]
 fn terminate_succeeds_on_an_empty_job() {
-    let job = Job::create(false).expect("creating a job must succeed");
+    let job = create(false).expect("creating a job must succeed");
     job.terminate(1)
         .expect("terminating an empty job must succeed");
     // Idempotent: a job with no members can be terminated repeatedly.

@@ -145,6 +145,7 @@ Windows-specific session layer that such tools can build on.
 - [Examples](https://github.com/P4suta/conpty-oxide/tree/main/examples)
 - [ConPTY lifecycle notes](https://github.com/P4suta/conpty-oxide/blob/main/docs/conpty-pitfalls.md)
 - [Changelog](https://github.com/P4suta/conpty-oxide/blob/main/CHANGELOG.md)
+- [Support](https://github.com/P4suta/conpty-oxide/blob/main/SUPPORT.md)
 - [Contributing](https://github.com/P4suta/conpty-oxide/blob/main/CONTRIBUTING.md)
 - [Security policy](https://github.com/P4suta/conpty-oxide/blob/main/SECURITY.md)
 - [Code of conduct](https://github.com/P4suta/conpty-oxide/blob/main/CODE_OF_CONDUCT.md)

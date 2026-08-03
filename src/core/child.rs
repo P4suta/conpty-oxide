@@ -9,7 +9,6 @@ use std::os::windows::io::{AsHandle, BorrowedHandle};
 
 use crate::core::job::Job;
 use crate::core::session::{RootChild, KILL_EXIT_CODE};
-use crate::core::wait::ProcessWaiter;
 use crate::error::{Error, Result};
 use crate::status::ExitStatus;
 use std::sync::Arc;
@@ -20,7 +19,7 @@ use std::sync::Arc;
 /// handle, Job, status cache, kill behavior, and Drop contract live here so
 /// those semantics cannot drift between front ends.
 pub(crate) struct ChildCore {
-    waiter: ProcessWaiter,
+    child: windows_spawn::Child,
     job: Arc<Job>,
     pid: u32,
     kill_on_drop: bool,
@@ -30,7 +29,7 @@ pub(crate) struct ChildCore {
 impl ChildCore {
     pub(crate) fn from_root(root: RootChild) -> Self {
         Self {
-            waiter: root.waiter,
+            child: root.child,
             job: root.job,
             pid: root.pid,
             kill_on_drop: root.kill_on_drop,
@@ -52,7 +51,12 @@ impl ChildCore {
         if let Some(status) = self.status {
             return Ok(status);
         }
-        let status = ExitStatus::from_raw(self.waiter.wait().map_err(Error::wait)?);
+        let status = ExitStatus::from_raw(
+            self.child
+                .wait()
+                .and_then(raw_exit_code)
+                .map_err(Error::wait)?,
+        );
         self.status = Some(status);
         Ok(status)
     }
@@ -61,10 +65,10 @@ impl ChildCore {
         if let Some(status) = self.status {
             return Ok(Some(status));
         }
-        let Some(code) = self.waiter.try_wait().map_err(Error::wait)? else {
+        let Some(status) = self.child.try_wait().map_err(Error::wait)? else {
             return Ok(None);
         };
-        let status = ExitStatus::from_raw(code);
+        let status = ExitStatus::from_raw(raw_exit_code(status).map_err(Error::wait)?);
         self.status = Some(status);
         Ok(Some(status))
     }
@@ -83,8 +87,15 @@ impl ChildCore {
 
 impl AsHandle for ChildCore {
     fn as_handle(&self) -> BorrowedHandle<'_> {
-        self.waiter.as_handle()
+        self.child.as_handle()
     }
+}
+
+fn raw_exit_code(status: std::process::ExitStatus) -> std::io::Result<u32> {
+    status
+        .code()
+        .map(|code| u32::from_ne_bytes(code.to_ne_bytes()))
+        .ok_or_else(|| std::io::Error::other("Windows child status did not contain an exit code"))
 }
 
 impl fmt::Debug for ChildCore {
