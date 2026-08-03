@@ -60,6 +60,17 @@ byte for byte.
   session Job, closes and permanently retires the pseudoconsole, and reports a
   spawn-phase error. 0.1.1 could leave the child running on that path.
 
+### Note on mutation testing
+
+This is the first mutation run against the delegated code. It could not have
+been done earlier: while the manifest carries `path = "../windows-spawn"`,
+cargo-mutants' copy mode cannot resolve the dependency in its temporary tree
+and fails at `cargo metadata`, and the weekly workflow does not check out the
+sibling either. The run used `--in-place`, as the CI shards do. All 150 mutants
+in the delegation surface are now caught; the one survivor,
+`Command::get_kill_on_drop`, was a test-only accessor whose test asserted a
+single value.
+
 ### Note on coverage
 
 Delegating process creation removed `src/command_tests.rs` and

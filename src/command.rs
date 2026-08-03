@@ -100,8 +100,15 @@ mod tests {
     #[test]
     fn records_program_and_test_drop_policy() {
         let mut command = Command::new("cmd.exe");
-        command.kill_on_drop(true);
         assert_eq!(command.get_program(), "cmd.exe");
+
+        // Both states and the default are asserted, not just the `true` case.
+        // Checking one value only lets the accessor be replaced by that
+        // constant without any test noticing.
+        assert!(!command.get_kill_on_drop());
+        command.kill_on_drop(true);
         assert!(command.get_kill_on_drop());
+        command.kill_on_drop(false);
+        assert!(!command.get_kill_on_drop());
     }
 }
