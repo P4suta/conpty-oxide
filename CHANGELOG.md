@@ -35,8 +35,9 @@ byte for byte.
 
 - Process command lowering, standard I/O inheritance, attribute lists,
   atomic Job attachment, and synchronous child control now delegate to
-  `windows-spawn` 0.1.0 through a one-way internal dependency. ConPTY creation,
-  registered waits, Tokio integration, and the public API remain unchanged.
+  `windows-spawn` 0.1.0, resolved from crates.io, through a one-way internal
+  dependency. ConPTY creation, registered waits, Tokio integration, and the
+  public API remain unchanged.
 - The unsafe pseudoconsole bridge is now implemented only by a private,
   mutex-guarded spawn capability. A spawn holds the pseudoconsole lifecycle
   mutex for the whole of `CreateProcessW`, so a concurrent resize, clear, or
@@ -60,16 +61,27 @@ byte for byte.
   session Job, closes and permanently retires the pseudoconsole, and reports a
   spawn-phase error. 0.1.1 could leave the child running on that path.
 
+### Removed
+
+- The pre-publication bootstrap that let this repository build against an
+  unpublished `windows-spawn`: the `path = "../windows-spawn"` override, the
+  five sibling-checkout steps in CI, the `paired-package-check` recipe and its
+  xtask implementation, and the sibling-layout requirement in `CONTRIBUTING.md`.
+  `windows-spawn` 0.1.0 is on crates.io, so `just package-check` covers
+  packaging on its own again. Building from source no longer requires a
+  particular directory layout.
+
 ### Note on mutation testing
 
-This is the first mutation run against the delegated code. It could not have
-been done earlier: while the manifest carries `path = "../windows-spawn"`,
-cargo-mutants' copy mode cannot resolve the dependency in its temporary tree
-and fails at `cargo metadata`, and the weekly workflow does not check out the
-sibling either. The run used `--in-place`, as the CI shards do. All 150 mutants
-in the delegation surface are now caught; the one survivor,
-`Command::get_kill_on_drop`, was a test-only accessor whose test asserted a
-single value.
+This is the first mutation run against the delegated code, and it had to use
+`--in-place` as the CI shards do. While the manifest still carried
+`path = "../windows-spawn"` for the pre-publication bootstrap, cargo-mutants'
+copy mode could not resolve the dependency in its temporary tree and failed at
+`cargo metadata`; the weekly workflow did not check out the sibling either, so
+copy-mode mutation was unavailable in any form. Removing the path override
+restores it. All 150 mutants in the delegation surface are now caught; the one
+survivor, `Command::get_kill_on_drop`, was a test-only accessor whose test
+asserted a single value.
 
 ### Note on coverage
 

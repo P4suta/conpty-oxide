@@ -132,10 +132,6 @@ mutants-ci shard: fetch-conpty
 package-check:
     cargo run --manifest-path xtask/Cargo.toml --locked -- package-check
 
-# Build and test the unpublished conpty-oxide/windows-spawn package pair.
-paired-package-check:
-    cargo run --manifest-path xtask/Cargo.toml --locked -- paired-package-check
-
 # Verify the latest immutable release, or the supplied v-prefixed tag.
 verify-release tag='':
     cargo run --manifest-path xtask/Cargo.toml --locked -- verify-release --tag '{{ tag }}'
