@@ -12,16 +12,22 @@ with Cargo's additional pre-1.0 compatibility rules.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-03
+
+The public API is unchanged from 0.1.1; every `public-api` snapshot matches
+byte for byte.
+
 ### Added
 
-- A temporary, downstream-owned pre-publication package check expands both
-  local crates, patches the normalized `windows-spawn` package into
-  `conpty-oxide`, and verifies Rust 1.75, all five feature shapes, and
-  blocking/Tokio external consumers without adding a reverse dependency.
-- An opt-in 64-iteration lifecycle soak repeats large-output teardown,
-  resize/close races, managed drop orders, Tokio cancellation, and EOF while
-  enforcing a post-warm-up process-handle budget and checking every recorded
-  root and grandchild PID is gone.
+- A 64-iteration lifecycle soak repeats large-output teardown, resize/close
+  races, managed drop orders, Tokio cancellation, and EOF while enforcing a
+  post-warm-up process-handle budget and checking every recorded root and
+  grandchild PID is gone. A weekly `soak` workflow runs it on Windows Server
+  2022 and 2025, so both the legacy and `ReleasePseudoConsole` teardown paths
+  get the repetition. Run it locally with `just soak`. Because the source
+  policy forbids ignored tests, the soak is gated on `CONPTY_OXIDE_RUN_SOAK`
+  and now says on stderr when it did not run, so a skipped soak can no longer
+  be mistaken for a passing one.
 - `SUPPORT.md`, a usage-question issue form, and `CODEOWNERS`, matching the
   governance files the sibling Windows crates already ship.
 
@@ -32,8 +38,17 @@ with Cargo's additional pre-1.0 compatibility rules.
   `windows-spawn` 0.1.0 through a one-way internal dependency. ConPTY creation,
   registered waits, Tokio integration, and the public API remain unchanged.
 - The unsafe pseudoconsole bridge is now implemented only by a private,
-  mutex-guarded spawn capability, preventing close or resize from racing
-  `CreateProcessW`.
+  mutex-guarded spawn capability. A spawn holds the pseudoconsole lifecycle
+  mutex for the whole of `CreateProcessW`, so a concurrent resize, clear, or
+  close can no longer reach the backend mid-transaction. 0.1.1 handed out the
+  raw `HPCON` with no guard. A resize or clear issued from another thread now
+  waits for an in-flight spawn, and spawning through a closed pseudoconsole
+  reports `ErrorKind::Spawn` with `io::ErrorKind::NotConnected`.
+- ConPTY startup now blanks the child's standard handles with `NULL` rather
+  than `INVALID_HANDLE_VALUE`, matching Microsoft Terminal's
+  `ConptyConnection.cpp`. Both set `STARTF_USESTDHANDLES` and both keep the
+  child off standard handles the parent redirected; this aligns the sentinel
+  with the reference implementation.
 
 ### Fixed
 
@@ -41,11 +56,18 @@ with Cargo's additional pre-1.0 compatibility rules.
   paragraph documented the sibling `windows-spawn` checkout above the install
   snippet, and the README ships to crates.io and docs.rs, so it reached
   consumers as if it were usage guidance. It now lives in `CONTRIBUTING.md`.
-- ConPTY child standard input, output, and error remain attached to the
-  pseudoconsole instead of falling back to redirected parent streams.
 - A failure to duplicate the root-watcher process handle now terminates the
   session Job, closes and permanently retires the pseudoconsole, and reports a
-  spawn-phase error.
+  spawn-phase error. 0.1.1 could leave the child running on that path.
+
+### Note on coverage
+
+Delegating process creation removed `src/command_tests.rs` and
+`src/core/proc_tests.rs`, 782 lines that covered command-line quoting,
+environment-block construction, and Job attachment. Those behaviors are now
+tested in `windows-spawn`. The 92% line, region, and function thresholds still
+hold, but they measure a smaller crate than they did in 0.1.1, so the numbers
+are not directly comparable across the two releases.
 
 ## [0.1.1] - 2026-08-01
 
@@ -92,6 +114,7 @@ Version 0.1 is Windows-only and requires Windows 10 version 1809 or later.
 Detached sessions, manual EOF policy, cursor inheritance, pre-staged spawn,
 and a cross-platform facade are intentionally outside the 0.1 API.
 
-[Unreleased]: https://github.com/P4suta/conpty-oxide/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/P4suta/conpty-oxide/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/P4suta/conpty-oxide/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/P4suta/conpty-oxide/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/P4suta/conpty-oxide/releases/tag/v0.1.0

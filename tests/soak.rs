@@ -41,9 +41,20 @@ struct RecordedProcess {
 
 /// Repeats the dangerous lifecycle interleavings in one process so handle
 /// growth is observable instead of being hidden by test-process exit.
+///
+/// Gated on an environment variable because the source policy forbids ignored
+/// tests. That gate makes a skipped run report as passed, so the skip is
+/// announced on stderr and `.github/workflows/soak.yml` runs it weekly. Both
+/// matter: without the notice a reader of the test output cannot tell the soak
+/// apart from a real pass, and without the schedule it would never run at all.
+/// Run it locally with `just soak`.
 #[test]
 fn scheduled_lifecycle_soak() {
     if std::env::var_os("CONPTY_OXIDE_RUN_SOAK").is_none() {
+        eprintln!(
+            "scheduled_lifecycle_soak did NOT run: set CONPTY_OXIDE_RUN_SOAK=1 \
+             or use `just soak`. This result does not cover the lifecycle soak."
+        );
         return;
     }
     let _watchdog = watchdog(TEST_BUDGET);

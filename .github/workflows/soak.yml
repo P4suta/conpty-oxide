@@ -1,0 +1,52 @@
+---
+# SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# The soak repeats teardown races 64 times in one process to make handle and
+# process leaks observable. It is too slow for the pull-request gate and its
+# environment gate makes a skipped run report as passed, so it needs a schedule
+# of its own; otherwise the changelog would advertise a soak that never runs.
+name: Lifecycle soak
+
+"on":
+  schedule:
+    - cron: "41 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    name: Lifecycle soak
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Server 2022 has no ReleasePseudoConsole export and exercises the
+        # legacy close worker; Server 2025 has it. The teardown paths differ,
+        # so both need the repetition.
+        os: [windows-2022, windows-latest]
+    env:
+      CONPTY_OXIDE_TEST_DLL_DIR: ${{ github.workspace }}/vendor/conpty
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
+        with:
+          tool: just@1.57.0
+      - name: Cache the ConPTY package
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: vendor/.package
+          key: conpty-package-${{ hashFiles('xtask/src/fetch_conpty.rs') }}
+      - name: Fetch the ConPTY bundle
+        run: just fetch-conpty
+      - name: Run the lifecycle soak
+        run: just soak
