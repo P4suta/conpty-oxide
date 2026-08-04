@@ -9,7 +9,12 @@
 # new release section stays a review-time edit.
 changelog_update = false
 dependencies_update = false
-release_always = false
+# `release_always` is left at its default of true. Setting it to false makes
+# release-plz publish only from a commit it authored through its own release
+# pull request, so any version bump made by hand -- or any release pull request
+# edited before merge -- leaves the crate permanently unreleasable: no release
+# pull request is proposed because the version is already ahead, and no release
+# happens because there was no release pull request.
 git_release_draft = true
 git_release_latest = false
 git_release_type = "auto"

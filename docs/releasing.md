@@ -55,10 +55,13 @@ trigger the CI that must run on a release pull request, and `environment:
 release` on the publishing job, because the crates.io trusted publisher is
 bound to that environment.
 
-It runs on every push to `main`. `release_always = false` and release pull
-requests mean an unrelated merge cannot publish: release-plz acts only when the
-manifest version on `main` is ahead of the registry. Merging a reviewed release
-pull request is therefore what authorises each publish.
+It runs on every push to `main` and publishes only when the manifest version on
+`main` is ahead of the registry, so an unrelated merge cannot publish. Merging
+a reviewed release pull request is what authorises each publish.
+
+Let release-plz own the version bump. Editing `version` by hand still reaches
+the registry, because `release_always` is at its default, but it skips the
+review step the release pull request exists to provide.
 
 Once such a pull request is merged, the workflow performs the following
 sequence:
