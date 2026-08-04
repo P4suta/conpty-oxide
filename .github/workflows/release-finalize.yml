@@ -2,10 +2,14 @@
 # SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
+# Called by release-plz.yml once release-plz has published the crate and left a
+# draft GitHub Release. Draft releases fire no release event and this
+# repository uses immutable releases, so the assets and attestations have to be
+# attached here, before the draft is published.
 name: Finalize release
 
 "on":
-  workflow_dispatch:
+  workflow_call:
     inputs:
       tag:
         description: Exact release tag created by release-plz
@@ -28,7 +32,10 @@ jobs:
     if: github.repository == 'P4suta/conpty-oxide'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    environment: release
+    # No environment gate here. The caller already stops at `release` before
+    # anything irreversible happens; by the time this runs the crate is on
+    # crates.io, so a second approval would only delay attaching the
+    # attestations to a release that is already effectively public.
     permissions:
       artifact-metadata: write
       attestations: write
@@ -55,7 +62,7 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Validate dispatch and inspect release
+      - name: Inspect the release
         id: inspect
         env:
           GH_TOKEN: ${{ github.token }}
@@ -64,18 +71,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ ! "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid semantic version: $RELEASE_VERSION" >&2
-            exit 1
-          fi
-          [[ "$RELEASE_TAG" == "v$RELEASE_VERSION" ]]
-          # Dispatching at the release tag is the normal path. Dispatching
-          # from main finalizes an existing tag after a finalizer defect,
-          # because the workflow tree recorded at a protected tag can never
-          # change. The checkout above is pinned to the tag either way, so
-          # the release commit is derived from the tag, not from the ref
-          # that carried the workflow definition.
-          [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" || "$GITHUB_REF" == "refs/heads/main" ]]
+          # The inputs come from release-plz's own output in the calling
+          # workflow, so they need no format validation. What still matters is
+          # that the tag resolves to the commit being built and that the
+          # manifest agrees with the version being finalized.
           release_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
           [[ "$(git rev-parse HEAD)" == "$release_commit" ]]
 

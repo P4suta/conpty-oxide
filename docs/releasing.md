@@ -36,12 +36,12 @@ Keep these repository settings enabled:
   automatic branch updates.
 
 The `release` Environment permits only `main` and `v*`. It contains the
-non-secret variables `RELEASE_PLZ_APP_CLIENT_ID` and `RELEASE_ENABLED`. Keep
-`RELEASE_ENABLED` set to `false` except during an explicitly approved publish.
-Add the permanent secret
+non-secret variable `RELEASE_PLZ_APP_CLIENT_ID` and the permanent secret
 `RELEASE_PLZ_APP_PRIVATE_KEY` for the installed `p4suta-release-plz` App. The
 App needs repository **Contents: read/write** and **Pull requests:
-read/write**; it does not need Administration access.
+read/write**; it does not need Administration access. The environment carries a
+branch policy rather than a reviewer gate; merging the release pull request is
+what authorises a release.
 
 The crates.io trusted publisher is owner `P4suta`, repository `conpty-oxide`,
 workflow `release-plz.yml`, Environment `release`. Publication uses only the
@@ -49,20 +49,26 @@ short-lived OIDC exchange; no registry token exists anywhere.
 
 ## Automated release flow
 
-`release-plz` runs only for the exact current `main` commit. Automatic runs
-come from a successful `CI` workflow; manual publication additionally queries
-Actions for a successful push-triggered CI run at the same SHA. It uses
-release pull requests and `release_always = false`, so an unrelated merge
-cannot publish. The publish action is not invoked at all unless the release
-Environment also has `RELEASE_ENABLED=true`. Its App token is limited to this
-repository and the workflow verifies the returned App slug before use.
+`release-plz.yml` is the workflow release-plz documents, with two deviations it
+also documents: a GitHub App token, because the default `GITHUB_TOKEN` cannot
+trigger the CI that must run on a release pull request, and `environment:
+release` on the publishing job, because the crates.io trusted publisher is
+bound to that environment.
 
-Once a reviewed release-plz pull request is current and the publish gate is
-enabled, release-plz performs the following sequence:
+It runs on every push to `main`. `release_always = false` and release pull
+requests mean an unrelated merge cannot publish: release-plz acts only when the
+manifest version on `main` is ahead of the registry. Merging a reviewed release
+pull request is therefore what authorises each publish.
+
+Once such a pull request is merged, the workflow performs the following
+sequence:
 
 1. `release-plz release` publishes the version, creates `vX.Y.Z`, and creates a
    draft GitHub release.
-2. `release-plz.yml` dispatches `release-finalize.yml` at that exact tag.
+2. The `finalize` job calls `release-finalize.yml` with that tag and version.
+   It is a called workflow rather than a release-event handler because GitHub
+   fires no release events for drafts, and this repository uses immutable
+   releases, so the assets must be attached before the draft is published.
 3. The finalizer downloads the registry-hosted `.crate`, checks its SHA-256
    against the crates.io sparse index, and checks the archive's Cargo metadata
    and VCS commit.
@@ -81,17 +87,15 @@ The SLSA predicate records the hosted finalizer that authenticated and promoted
 the crates.io artifact. It is not a claim of an independent reproducible build
 or of a particular SLSA build level. Attestation verification binds the signing
 workflow, the repository, and the artifact digests; the registry checksum and
-VCS checks bind those artifacts to the tagged commit, so the finalizer's
-dispatch ref is not pinned.
+VCS checks bind those artifacts to the tagged commit.
 
 If finalization fails before publication, the release remains a mutable draft.
-Fix the cause and re-run `release-finalize.yml` at the existing tag. If the
-defect is in the finalizer itself, fix it on `main` and dispatch from `main`
-with the same inputs: the tag's recorded workflow tree cannot change, and the
-workflow checks out the tag it finalizes either way. Never
-replace the tag or publish the incomplete draft manually. If publication
-succeeded but its eventual immutable-release verification failed, re-run the
-same tag: the workflow takes its published, verify-only path.
+The crate is already on crates.io at that point, so never publish again and
+never replace the tag. Fix the cause on `main` and re-run the failed
+`Release-plz` run from the Actions UI; the `release` job is idempotent when the
+version is already published, and the finalizer re-derives everything from the
+tag. If publication succeeded but its eventual immutable-release verification
+failed, the same re-run takes the published, verify-only path.
 
 ## Registry and GitHub reconciliation
 
@@ -105,9 +109,9 @@ accepted the crate, do not publish again and do not move an existing tag.
 2. If and only if both checks pass, create the missing `vX.Y.Z` tag at that
    exact commit and/or create the missing draft GitHub release for that tag.
    Stop instead of reconciling if any existing tag or release points elsewhere.
-3. Dispatch `release-finalize.yml` at the tag with the matching `tag` and
-   `version` inputs. The finalizer repeats the registry checksum and VCS checks
-   before it attaches or publishes anything.
+3. Re-run the `Release-plz` run for that commit. Its `release` job is
+   idempotent once the version is published, and the `finalize` job repeats the
+   registry checksum and VCS checks before it attaches or publishes anything.
 
 Keep the reconciled release as a draft until the finalizer succeeds. The
 immutable release, SLSA provenance, CycloneDX attestation, and consumer checks
@@ -125,9 +129,8 @@ Before merging a release-plz pull request:
    a release that changed lifecycle or Win32 boundary code.
 5. Merge only after the required Ruleset checks pass on the current head.
 
-Keep `RELEASE_ENABLED=false` through the merge. When that exact merge commit's
-CI run succeeds, enable the gate, manually dispatch `Release-plz` from `main`,
-and return the gate to `false` after the release workflow completes.
+Merging the release pull request starts `Release-plz` automatically and it
+publishes without a further prompt. Do the review before merging, not after.
 
 After publication, verify the distributed bytes independently:
 
