@@ -16,17 +16,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# TEMPORARY, until windows-spawn 0.1.0 is on crates.io.
-#
-# The manifest carries both `version = "0.1.0"` and `path = "../windows-spawn"`,
-# so every job that touches the crate needs the sibling checked out beside the
-# workspace; without it Cargo fails with "failed to load source for dependency".
-# `actions/checkout` cannot write outside $GITHUB_WORKSPACE, hence the clone.
-#
-# Checking out the sibling is the downstream's business by design: windows-spawn
-# neither checks out nor pins this repository. Once it is published, delete
-# every "Check out the unpublished windows-spawn sibling" step, drop the path
-# override from Cargo.toml, and restore `just package-check`.
 jobs:
   policy:
     name: Repository policy
@@ -34,8 +23,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Check out the unpublished windows-spawn sibling
-        run: git clone --depth 1 https://github.com/P4suta/windows-spawn.git ../windows-spawn
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: stable
@@ -66,8 +53,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Check out the unpublished windows-spawn sibling
-        run: git clone --depth 1 https://github.com/P4suta/windows-spawn.git ../windows-spawn
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: "1.75"
@@ -118,8 +103,6 @@ jobs:
       CONPTY_OXIDE_TEST_DLL_DIR: ${{ github.workspace }}/vendor/conpty
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Check out the unpublished windows-spawn sibling
-        run: git clone --depth 1 https://github.com/P4suta/windows-spawn.git ../windows-spawn
       # The contributor-automation crate always builds with stable, so install
       # it alongside the matrix toolchain; the matrix toolchain is installed
       # last and stays the default the tests run under.
@@ -161,8 +144,6 @@ jobs:
       CONPTY_OXIDE_TEST_DLL_DIR: ${{ github.workspace }}/vendor/conpty
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Check out the unpublished windows-spawn sibling
-        run: git clone --depth 1 https://github.com/P4suta/windows-spawn.git ../windows-spawn
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: stable
@@ -191,8 +172,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Check out the unpublished windows-spawn sibling
-        run: git clone --depth 1 https://github.com/P4suta/windows-spawn.git ../windows-spawn
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: "1.75"
@@ -205,12 +184,8 @@ jobs:
       - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
         with:
           tool: just@1.57.0
-      # `package-check` alone cannot resolve the unpublished dependency and
-      # fails before inspecting anything. The paired recipe patches the
-      # normalized sibling package in and additionally asserts the published
-      # manifest keeps the registry version and loses the path.
       - name: Inspect and smoke-test the published package
-        run: just paired-package-check
+        run: just package-check
 
   ci-required:
     name: CI required

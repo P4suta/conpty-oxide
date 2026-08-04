@@ -37,21 +37,6 @@ must run before the first `just` invocation.
 The project supports Rust 1.75 and the three MSVC Windows targets listed in
 `deny.toml`. The setup recipe installs pinned tools and repository hooks.
 
-### Sibling `windows-spawn` checkout (temporary)
-
-Until `windows-spawn` 0.1.0 is published, building from source requires
-`conpty-oxide/` and `windows-spawn/` to share the same parent directory. The
-manifest carries both `version = "0.1.0"` and `path = "../windows-spawn"`;
-Cargo drops the path from the normalized package while retaining the future
-registry requirement, and `just paired-package-check` verifies that the
-normalized manifest keeps the version and loses the path.
-
-This is a one-way pre-publication bootstrap, not a reciprocal repository
-contract — `windows-spawn` neither checks out nor pins `conpty-oxide`. Once
-`windows-spawn` 0.1.0 is on crates.io, remove the path override, drop the
-sibling-layout requirement, and retire `paired-package-check`; `just
-package-check` then covers packaging on its own.
-
 ## Making a change
 
 - Keep the public 0.1 surface centered on managed blocking and Tokio sessions.
