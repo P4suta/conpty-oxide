@@ -29,7 +29,12 @@ jobs:
   release:
     name: Release-plz release
     if: github.repository == 'P4suta/conpty-oxide'
-    runs-on: ubuntu-24.04
+    # Windows, not the ubuntu-latest of the upstream template. `cargo publish`
+    # verifies the tarball by building it, and this crate is Windows-only: on
+    # Linux the `cfg(windows)` dependency on windows-spawn is absent while the
+    # modules that use it still compile, so verification fails. Nothing else in
+    # CI builds on Linux, so this only ever surfaces here.
+    runs-on: windows-2022
     timeout-minutes: 45
     environment: release
     permissions:
@@ -98,7 +103,9 @@ jobs:
     # version that is being published in the same run.
     needs: release
     if: always() && github.repository == 'P4suta/conpty-oxide'
-    runs-on: ubuntu-24.04
+    # Windows for the same reason: release-plz packages the crate to compare it
+    # against the registry, and cargo-semver-checks builds the public API.
+    runs-on: windows-2022
     timeout-minutes: 30
     # The App credentials are scoped to this environment, so both jobs need it
     # to mint a token at all.
