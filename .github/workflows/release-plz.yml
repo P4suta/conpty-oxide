@@ -7,9 +7,12 @@
 #
 #   * A GitHub App token instead of GITHUB_TOKEN. The default token cannot
 #     trigger other workflows, so CI would never run on a release pull request.
-#   * `environment: release` on the publishing job. The crates.io trusted
-#     publisher is bound to this repository, this workflow file, and that
-#     environment, so no registry token exists anywhere.
+#   * `environment: release` on both jobs. The crates.io trusted publisher is
+#     bound to this repository, this workflow file, and that environment, so no
+#     registry token exists anywhere; the App credentials are scoped to it too,
+#     so neither job can mint a token without it. The environment carries a
+#     branch policy, not a reviewer gate: merging the release pull request is
+#     what authorises a release.
 name: Release-plz
 
 "on":
@@ -97,6 +100,9 @@ jobs:
     if: always() && github.repository == 'P4suta/conpty-oxide'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # The App credentials are scoped to this environment, so both jobs need it
+    # to mint a token at all.
+    environment: release
     permissions: {}
     concurrency:
       group: release-plz-pr-${{ github.ref }}

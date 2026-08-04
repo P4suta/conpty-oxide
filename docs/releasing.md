@@ -39,8 +39,9 @@ The `release` Environment permits only `main` and `v*`. It contains the
 non-secret variable `RELEASE_PLZ_APP_CLIENT_ID` and the permanent secret
 `RELEASE_PLZ_APP_PRIVATE_KEY` for the installed `p4suta-release-plz` App. The
 App needs repository **Contents: read/write** and **Pull requests:
-read/write**; it does not need Administration access. Its required reviewer is
-the release gate: nothing is published until that deployment is approved.
+read/write**; it does not need Administration access. The environment carries a
+branch policy rather than a reviewer gate; merging the release pull request is
+what authorises a release.
 
 The crates.io trusted publisher is owner `P4suta`, repository `conpty-oxide`,
 workflow `release-plz.yml`, Environment `release`. Publication uses only the
@@ -56,11 +57,11 @@ bound to that environment.
 
 It runs on every push to `main`. `release_always = false` and release pull
 requests mean an unrelated merge cannot publish: release-plz acts only when the
-manifest version on `main` is ahead of the registry. The required reviewer on
-the `release` environment is what authorises each publish.
+manifest version on `main` is ahead of the registry. Merging a reviewed release
+pull request is therefore what authorises each publish.
 
-Once a reviewed release-plz pull request is merged and the deployment is
-approved, the workflow performs the following sequence:
+Once such a pull request is merged, the workflow performs the following
+sequence:
 
 1. `release-plz release` publishes the version, creates `vX.Y.Z`, and creates a
    draft GitHub release.
@@ -128,9 +129,8 @@ Before merging a release-plz pull request:
    a release that changed lifecycle or Win32 boundary code.
 5. Merge only after the required Ruleset checks pass on the current head.
 
-Merging the release pull request starts `Release-plz` automatically. It stops
-at the `release` environment for approval; approve it once the merge commit's
-CI is green.
+Merging the release pull request starts `Release-plz` automatically and it
+publishes without a further prompt. Do the review before merging, not after.
 
 After publication, verify the distributed bytes independently:
 
