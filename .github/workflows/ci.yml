@@ -27,8 +27,8 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
-      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14  # v4
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654  # v4
         with:
           version: 2026.7.13
           # Avoid cold-installing test, coverage, mutation, hook, and API
@@ -66,8 +66,8 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
           targets: x86_64-pc-windows-msvc, i686-pc-windows-msvc, aarch64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
-      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
         with:
           tool: just@1.57.0,cargo-hack@0.6.45,cargo-public-api@0.52.0
       - name: Strict Clippy feature powerset
@@ -112,8 +112,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: ${{ matrix.rust }}
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
-      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
         with:
           tool: just@1.57.0,cargo-nextest@0.9.140
       - name: Cache the ConPTY package
@@ -148,8 +148,8 @@ jobs:
         with:
           toolchain: stable
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
-      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
         with:
           tool: just@1.57.0,cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7
       - name: Cache the ConPTY package
@@ -180,8 +180,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
-      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
         with:
           tool: just@1.57.0
       - name: Inspect and smoke-test the published package
