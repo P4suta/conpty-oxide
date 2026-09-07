@@ -131,7 +131,7 @@ jobs:
         with:
           toolchain: stable
       # `semver_check = true` in .release-plz.toml needs this on PATH.
-      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
+      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf  # v2.87.2
         with:
           tool: cargo-semver-checks@0.45.0
       - name: Run release-plz
