@@ -187,10 +187,40 @@ jobs:
       - name: Inspect and smoke-test the published package
         run: just package-check
 
+  # Everything above tests the crate. Nothing above touches the release path,
+  # which is why every defect in it so far only appeared during a release: a
+  # path dependency that broke `cargo metadata`, a `release_always` setting
+  # that made the crate unreleasable, a runner that cannot build the crate
+  # `cargo publish` verifies. This job runs the real release action with
+  # `dry_run`, so it downloads the same actions (including the ones release-plz
+  # itself calls), parses the same configuration, and performs the same publish
+  # verification build -- without uploading anything.
+  release-dry-run:
+    name: Release dry run
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+      - uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9  # v0.5.131
+        with:
+          command: release
+          version: 0.3.160
+          dry_run: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   ci-required:
     name: CI required
     if: always()
-    needs: [policy, hygiene, test, coverage, package]
+    needs: [policy, hygiene, test, coverage, package, release-dry-run]
     runs-on: ubuntu-latest
     steps:
       - name: Fail unless every required job succeeded
