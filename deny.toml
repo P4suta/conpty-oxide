@@ -33,9 +33,7 @@ ignore = false
 highlight = "all"
 multiple-versions = "deny"
 multiple-versions-include-dev = true
-skip = [
-  { crate = "syn@3.0.3", reason = "thiserror 2 uses syn 3 while the tokio and tracing proc macros still use syn 2" },
-]
+skip = []
 skip-tree = []
 wildcards = "deny"
 

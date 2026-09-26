@@ -46,7 +46,8 @@ required-features = ["tokio"]
 
 [target.'cfg(windows)'.dependencies]
 windows-spawn = "0.1.0"
-thiserror = "2"
+# Cargo 1.75 does not resolve dependencies by MSRV, so this exact pin keeps future consumer resolution compatible.
+thiserror = "=1.0.69"
 tokio = { version = "1", optional = true, features = ["net", "rt"] }
 tracing = { version = "0.1", optional = true }
 
