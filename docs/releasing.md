@@ -141,7 +141,9 @@ After publication, verify the distributed bytes independently:
 just verify-release v0.1.0
 ```
 
-The scheduled release-integrity workflow runs the same verification for the latest immutable release, then feeds the verified SBOM to Grype and uploads its SARIF results to Code Scanning.
+The scheduled release-integrity workflow verifies the latest immutable release.
+It feeds the verified SBOM to Grype.
+It uploads Grype's SARIF results to Code Scanning.
 Renovate updates the current source tree.
 GitHub Dependabot alerts and `cargo deny` also cover that tree.
 This workflow instead verifies the crate users can already download.
