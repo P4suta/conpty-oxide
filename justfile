@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 conpty-oxide contributors <https://github.com/P4suta/conpty-oxide/graphs/contributors>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
+set shell := ["pwsh", "-NoLogo", "-NoProfile", "-Command"]
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
 
 # List available recipes
