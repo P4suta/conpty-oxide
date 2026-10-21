@@ -5,6 +5,10 @@
 name: Verify credential access
 
 'on':
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/verify-doppler.yml
   workflow_dispatch:
 
 permissions: {}
@@ -16,7 +20,9 @@ concurrency:
 jobs:
   automation_0:
     name: Verify automation access
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment: release
