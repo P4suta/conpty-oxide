@@ -20,6 +20,10 @@ use regex::Regex;
 
 use crate::util::repository_root;
 
+const PERCENT_ESCAPE_WIDTH: usize = 3;
+const SECOND_HEX_DIGIT_OFFSET: usize = 2;
+const HEX_RADIX: u32 = 16;
+
 const REQUIRED_PATHS: [&str; 17] = [
     "Cargo.lock",
     "Cargo.toml",
@@ -429,14 +433,14 @@ fn percent_decode(text: &str) -> String {
     while index < bytes.len() {
         let base = bytes[index];
         let escape = (base == b'%'
-            && index + 2 < bytes.len()
+            && index + SECOND_HEX_DIGIT_OFFSET < bytes.len()
             && bytes[index + 1].is_ascii_hexdigit()
-            && bytes[index + 2].is_ascii_hexdigit())
-        .then(|| u8::from_str_radix(&text[index + 1..index + 3], 16).ok())
+            && bytes[index + SECOND_HEX_DIGIT_OFFSET].is_ascii_hexdigit())
+        .then(|| u8::from_str_radix(&text[index + 1..index + PERCENT_ESCAPE_WIDTH], HEX_RADIX).ok())
         .flatten();
         if let Some(value) = escape {
             decoded.push(value);
-            index += 3;
+            index += PERCENT_ESCAPE_WIDTH;
         } else {
             decoded.push(base);
             index += 1;

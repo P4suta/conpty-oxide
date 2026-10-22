@@ -45,12 +45,32 @@ jobs:
       tag: ${{ steps.released.outputs.tag }}
       version: ${{ steps.released.outputs.version }}
     steps:
+      - name: Fetch automation credentials
+        id: doppler_automation_0
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ vars.DOPPLER_AUTOMATION_IDENTITY_ID }}
+          doppler-project: conpty-oxide
+          doppler-config: automation
+          inject-env-vars: false
+      - name: Reject missing or unresolved automation credentials
+        if: >-
+          ${{ steps.doppler_automation_0.outcome == 'success' && (
+          steps.doppler_automation_0.outputs.GITHUB_APP_CLIENT_ID == '' ||
+          startsWith(steps.doppler_automation_0.outputs.GITHUB_APP_CLIENT_ID, '${') ||
+          steps.doppler_automation_0.outputs.GITHUB_APP_PRIVATE_KEY == '' ||
+          startsWith(steps.doppler_automation_0.outputs.GITHUB_APP_PRIVATE_KEY, '${')
+          ) }}
+        shell: bash
+        run: exit 1
+
       - name: Mint the release GitHub App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ vars.RELEASE_PLZ_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+          client-id: ${{ steps.doppler_automation_0.outputs.GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ steps.doppler_automation_0.outputs.GITHUB_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: read
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -110,17 +130,38 @@ jobs:
     # The App credentials are scoped to this environment, so both jobs need it
     # to mint a token at all.
     environment: release
-    permissions: {}
+    permissions:
+      id-token: write
     concurrency:
       group: release-plz-pr-${{ github.ref }}
       cancel-in-progress: false
     steps:
+      - name: Fetch automation credentials
+        id: doppler_automation_0
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ vars.DOPPLER_AUTOMATION_IDENTITY_ID }}
+          doppler-project: conpty-oxide
+          doppler-config: automation
+          inject-env-vars: false
+      - name: Reject missing or unresolved automation credentials
+        if: >-
+          ${{ steps.doppler_automation_0.outcome == 'success' && (
+          steps.doppler_automation_0.outputs.GITHUB_APP_CLIENT_ID == '' ||
+          startsWith(steps.doppler_automation_0.outputs.GITHUB_APP_CLIENT_ID, '${') ||
+          steps.doppler_automation_0.outputs.GITHUB_APP_PRIVATE_KEY == '' ||
+          startsWith(steps.doppler_automation_0.outputs.GITHUB_APP_PRIVATE_KEY, '${')
+          ) }}
+        shell: bash
+        run: exit 1
+
       - name: Mint the release GitHub App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ vars.RELEASE_PLZ_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+          client-id: ${{ steps.doppler_automation_0.outputs.GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ steps.doppler_automation_0.outputs.GITHUB_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
