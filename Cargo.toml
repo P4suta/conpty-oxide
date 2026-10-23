@@ -48,7 +48,11 @@ required-features = ["tokio"]
 windows-spawn = "0.1.0"
 # Cargo 1.75 does not resolve dependencies by MSRV, so this exact pin keeps future consumer resolution compatible.
 thiserror = "=1.0.69"
-tokio = { version = "1.53.3", optional = true, features = ["net", "rt"] }
+# Tokio 1.54 requires Rust 1.85, above this crate's Rust 1.75 floor.
+tokio = { version = ">=1.53.3, <1.54", optional = true, features = [
+  "net",
+  "rt",
+] }
 tracing = { version = "0.1", optional = true }
 
 [target.'cfg(windows)'.dev-dependencies.windows-sys]
@@ -65,7 +69,7 @@ features = [
 # Keeping those here rather than in the optional dependency above means users
 # of the `tokio` feature only pay for `net` and `rt`.
 [target.'cfg(windows)'.dev-dependencies.tokio]
-version = "1.53.3"
+version = ">=1.53.3, <1.54"
 features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"]
 
 [target.'cfg(windows)'.dependencies.windows-sys]
