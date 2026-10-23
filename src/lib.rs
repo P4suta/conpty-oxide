@@ -99,15 +99,12 @@
 //! spawning are intentionally outside the 0.1 API. They can be added later as
 //! typed advanced operations when concrete use cases justify them.
 
-// `cargo test --doc` normally inspects only Rust source, not README.md. Under
-// the all-frontend configuration used by CI, append the README while rustdoc
-// is collecting tests so its blocking, Tokio, and low-level snippets are the
-// exact text compiled. It is omitted from ordinary API documentation and from
-// single/no-frontend doctest legs, where one of those snippets is intentionally
-// unavailable.
+// Compile both documentation entry points as doctests with both frontends.
+// Single-frontend builds omit snippets that require the other frontend.
 #![cfg_attr(
     all(doctest, feature = "blocking", feature = "tokio"),
-    doc = include_str!("../README.md")
+    doc = include_str!("../README.md"),
+    doc = include_str!("../docs/README.md")
 )]
 // docs.rs passes `--cfg docsrs` (see `[package.metadata.docs.rs]`), which
 // turns on the nightly-only `doc_cfg` feature: every feature-gated item then
