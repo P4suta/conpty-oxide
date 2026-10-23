@@ -43,6 +43,7 @@ lint-rust:
 # Supply-chain, license, source, and duplicate-dependency policy.
 supply-chain:
     cargo deny --all-features --locked check -D unmatched-skip -D unmatched-skip-root
+    cargo deny --manifest-path xtask/Cargo.toml --all-features --locked check advisories
 
 # Check the contributor automation crate: formatting, lints, and tests.
 xtask-check:
