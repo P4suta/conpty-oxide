@@ -10,6 +10,11 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 Accepted, 2026-08-01.
 
+The schedule and release-result policy is superseded by [candidate audits][audit].
+The exclusion requirements and recorded equivalences below still apply.
+
+[audit]: heavy-audits-run-on-release-candidates.md
+
 ## Context
 
 A full mutation run over this suite takes hours across four shards, which

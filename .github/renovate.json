@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>P4suta/renovate-config"],
+  "packageRules": [
+    {
+      "description": "Keep Rust 1.75 support because Tokio 1.54 requires Rust 1.85 (https://github.com/tokio-rs/tokio/blob/tokio-1.54.1/tokio/Cargo.toml).",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tokio"],
+      "allowedVersions": "<1.54"
+    }
+  ]
+}

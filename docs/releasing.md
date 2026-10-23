@@ -128,8 +128,9 @@ Before merging a release-plz pull request:
 2. Run `just release-check` from a clean worktree.
 3. Confirm the public API snapshots, package contents, external blocking/Tokio
    consumers, coverage threshold, and dry-run publish all pass.
-4. Confirm the latest scheduled mutation audit is green, or dispatch one for
-   a release that changed lifecycle or Win32 boundary code.
+4. Dispatch `mutation.yml` and `soak.yml` for the candidate ref.
+   Confirm both successful runs have the exact candidate commit as their head SHA.
+   Run them again if the candidate changes.
 5. Merge only after the required Ruleset checks pass on the current head.
 
 Merging the release pull request starts `Release-plz` automatically and it
