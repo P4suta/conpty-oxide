@@ -57,11 +57,13 @@ just pre-push
 just package-check
 ```
 
-CI runs those gates — Windows matrix, MSRV, public API, external DLL,
-documentation, coverage, plus the package smoke test — on every pull request;
-`just ci` reproduces them locally. Mutation testing runs as a separate
-scheduled workflow under the policy in
-[ADR 0001](docs/adr/0001-mutation-testing.md).
+CI runs the Windows matrix, MSRV checks, and public API checks on every PR.
+It also checks the external DLL, docs, coverage, and package smoke tests.
+`just ci` reproduces these gates locally.
+Mutation and soak runs audit the exact release candidate on demand.
+See the [release audit policy][audits].
+
+[audits]: docs/adr/heavy-audits-run-on-release-candidates.md
 
 ## Public API changes
 

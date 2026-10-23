@@ -5,12 +5,18 @@
 name: Mutation testing
 
 "on":
-  schedule:
-    - cron: "17 3 * * 0"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   mutants:
@@ -25,9 +31,12 @@ jobs:
       CONPTY_OXIDE_TEST_DLL_DIR: ${{ github.workspace }}/vendor/conpty
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
-          toolchain: stable
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      - name: Select stable Rust
+        run: rustup default stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
       - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf  # v2.85.2
         with:
@@ -38,7 +47,9 @@ jobs:
           path: vendor/.package
           key: conpty-package-${{ hashFiles('xtask/src/fetch_conpty.rs') }}
       - name: Run mutation shard
-        run: just mutants-ci ${{ matrix.shard }}
+        env:
+          MUTATION_SHARD: ${{ matrix.shard }}
+        run: just mutants-ci $env:MUTATION_SHARD
       - name: Upload mutation results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -46,3 +57,4 @@ jobs:
           name: mutants-${{ matrix.shard }}-of-4
           path: mutants.out
           if-no-files-found: error
+          retention-days: 7

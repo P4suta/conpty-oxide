@@ -5,16 +5,16 @@
 name: CodeQL
 
 "on":
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    - cron: "31 2 * * 3"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      security-events: write
+      security-events: write  # Upload CodeQL results to code scanning.
     strategy:
       fail-fast: false
       matrix:
@@ -41,9 +41,11 @@ jobs:
         with:
           persist-credentials: false
       - if: matrix.language == 'rust'
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
-        with:
-          toolchain: stable
+        name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      - if: matrix.language == 'rust'
+        name: Select stable Rust
+        run: rustup default stable
       - name: Initialize CodeQL
         uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4.37.3
         with:
