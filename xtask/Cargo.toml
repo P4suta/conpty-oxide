@@ -22,12 +22,11 @@ syn = { version = "2", features = ["full", "visit"] }
 tar = "0.4"
 ureq = "2"
 
-# The NuGet package only contains stored and deflate entries; the default
-# crypto and extra-compression features would only widen the dependency tree.
+# Archive reads only need stored entries and the existing flate2 decoder.
 [dependencies.zip]
-version = "2"
+version = "9"
 default-features = false
-features = ["deflate"]
+features = ["deflate-flate2"]
 
 # An empty workspace table detaches this tool from the published crate so
 # contributor automation never affects its lockfile, lints, packaging, or
