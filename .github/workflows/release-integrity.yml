@@ -21,9 +21,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
-      attestations: read
-      contents: read
-      security-events: write
+      attestations: read  # Verify attestations on the published release.
+      contents: read  # Read metadata and assets from published releases.
+      security-events: write  # Upload vulnerability findings to code scanning.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -89,7 +89,7 @@ jobs:
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
         with:
           sbom: ${{ steps.verify.outputs.sbom }}
-          grype-version: 0.116.1
+          grype-version: v0.116.1
           output-format: sarif
           severity-cutoff: high
           fail-build: true
